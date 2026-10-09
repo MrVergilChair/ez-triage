@@ -1,0 +1,6 @@
+# Windows tool: keep Windows line endings in the working copy.
+*.ps1  text eol=crlf
+*.psm1 text eol=crlf
+*.xaml text eol=crlf
+*.cmd  text eol=crlf
+*.txt  text eol=crlf
