@@ -1,0 +1,21 @@
+# Never commit evidence, case output or third-party tools.
+*.zip
+*.e01
+*.vhd
+*.vhdx
+*.vmdk
+*.raw
+*.dd
+*.evtx
+*.pf
+*.hve
+*.dat
+*.csv
+*_EZTriage/
+Cases/
+Evidence/
+net9/
+net6/
+EZTools/
+SQLite.Interop.dll
+*.log

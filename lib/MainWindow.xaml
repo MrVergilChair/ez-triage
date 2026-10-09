@@ -1,0 +1,226 @@
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="EZ Triage" Width="1220" Height="900" MinWidth="980" MinHeight="680"
+        WindowStartupLocation="CenterScreen" Background="#F3F4F6"
+        FontFamily="Segoe UI" FontSize="12" UseLayoutRounding="True" TextOptions.TextFormattingMode="Display">
+  <Window.Resources>
+    <Style TargetType="GroupBox">
+      <Setter Property="Background" Value="White"/>
+      <Setter Property="BorderBrush" Value="#D6D9DD"/>
+      <Setter Property="Padding" Value="8,6,8,8"/>
+      <Setter Property="HeaderTemplate">
+        <Setter.Value>
+          <DataTemplate><TextBlock Text="{Binding}" FontWeight="SemiBold"/></DataTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <Style TargetType="Button">
+      <Setter Property="Padding" Value="10,3"/>
+      <Setter Property="MinHeight" Value="26"/>
+    </Style>
+    <Style TargetType="TextBox">
+      <Setter Property="Padding" Value="3,3"/>
+      <Setter Property="VerticalContentAlignment" Value="Center"/>
+    </Style>
+    <Style x:Key="Hint" TargetType="TextBlock">
+      <Setter Property="Foreground" Value="#5A636E"/>
+      <Setter Property="TextWrapping" Value="Wrap"/>
+    </Style>
+    <Style x:Key="Mono" TargetType="TextBox">
+      <Setter Property="FontFamily" Value="Consolas"/>
+      <Setter Property="FontSize" Value="12"/>
+      <Setter Property="IsReadOnly" Value="True"/>
+      <Setter Property="Background" Value="#FBFBFC"/>
+      <Setter Property="BorderBrush" Value="#E1E4E8"/>
+      <Setter Property="Padding" Value="6,4"/>
+    </Style>
+  </Window.Resources>
+
+  <DockPanel>
+    <StatusBar DockPanel.Dock="Bottom" Background="#E9EBEE">
+      <StatusBarItem><TextBlock x:Name="LblStatus" Text="Ready"/></StatusBarItem>
+      <StatusBarItem HorizontalAlignment="Right"><TextBlock x:Name="LblVersion" Foreground="#5A636E"/></StatusBarItem>
+    </StatusBar>
+
+    <Grid Margin="12,10,12,8">
+      <Grid.RowDefinitions>
+        <RowDefinition Height="Auto"/>
+        <RowDefinition Height="*" MinHeight="300"/>
+        <RowDefinition Height="Auto"/>
+        <RowDefinition Height="5"/>
+        <RowDefinition Height="160" MinHeight="90"/>
+      </Grid.RowDefinitions>
+
+      <!-- Sources -->
+      <GroupBox Grid.Row="0" Header="Sources">
+        <Grid>
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="100"/>
+            <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="Auto"/>
+          </Grid.ColumnDefinitions>
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+          </Grid.RowDefinitions>
+
+          <Label Grid.Row="0" Content="EZ Tools folder" Target="{Binding ElementName=TxtTools}" Padding="0" VerticalAlignment="Center"/>
+          <TextBox Grid.Row="0" Grid.Column="1" x:Name="TxtTools" Margin="0,2"/>
+          <StackPanel Grid.Row="0" Grid.Column="2" Orientation="Horizontal" Margin="6,2,0,2">
+            <Button x:Name="BtnTools" Content="Browse..." MinWidth="80"/>
+          </StackPanel>
+          <TextBlock Grid.Row="1" Grid.Column="1" x:Name="LblTools" Style="{StaticResource Hint}" Margin="0,0,0,6" Text="Point to the folder with MFTECmd.exe, PECmd.exe and the other tools."/>
+
+          <Label Grid.Row="2" Content="Evidence" Target="{Binding ElementName=TxtEvidence}" Padding="0" VerticalAlignment="Center"/>
+          <TextBox Grid.Row="2" Grid.Column="1" x:Name="TxtEvidence" Margin="0,2"/>
+          <StackPanel Grid.Row="2" Grid.Column="2" Orientation="Horizontal" Margin="6,2,0,2">
+            <Button x:Name="BtnEvFolder" Content="Folder / drive..." MinWidth="80"/>
+            <Button x:Name="BtnEvZip" Content="ZIP..." MinWidth="60" Margin="6,0,0,0"/>
+          </StackPanel>
+          <TextBlock Grid.Row="3" Grid.Column="1" x:Name="LblEvidence" Style="{StaticResource Hint}" Margin="0,0,0,6" Text="A KAPE or Velociraptor collection (folder or ZIP), or a mounted drive."/>
+
+          <Label Grid.Row="4" Content="Case folder" Target="{Binding ElementName=TxtCase}" Padding="0" VerticalAlignment="Center"/>
+          <TextBox Grid.Row="4" Grid.Column="1" x:Name="TxtCase" Margin="0,2"/>
+          <StackPanel Grid.Row="4" Grid.Column="2" Orientation="Horizontal" Margin="6,2,0,2">
+            <Button x:Name="BtnCase" Content="Browse..." MinWidth="80"/>
+          </StackPanel>
+          <TextBlock Grid.Row="5" Grid.Column="1" x:Name="LblCase" Style="{StaticResource Hint}" Text="Output goes here, one folder per tool."/>
+        </Grid>
+      </GroupBox>
+
+      <!-- Tools and options -->
+      <Grid Grid.Row="1" Margin="0,10,0,0">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="400" MinWidth="320"/>
+          <ColumnDefinition Width="10"/>
+          <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+
+        <GroupBox Grid.Column="0" Header="Tools">
+          <DockPanel>
+            <WrapPanel DockPanel.Dock="Top" x:Name="PnlPresets" Margin="0,0,0,6">
+              <TextBlock Text="Preset:" Foreground="#5A636E" VerticalAlignment="Center" Margin="0,0,6,0"/>
+            </WrapPanel>
+            <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,6,0,0">
+              <Button x:Name="BtnSelectAll" Content="Select all found" Padding="8,2" MinHeight="24"/>
+              <Button x:Name="BtnSelectNone" Content="Clear" Padding="8,2" MinHeight="24" Margin="6,0,0,0"/>
+            </StackPanel>
+            <ScrollViewer VerticalScrollBarVisibility="Auto">
+              <StackPanel x:Name="PnlTools"/>
+            </ScrollViewer>
+          </DockPanel>
+        </GroupBox>
+
+        <GroupBox Grid.Column="2" x:Name="GrpOptions" Header="Options">
+          <DockPanel>
+            <TextBlock DockPanel.Dock="Top" x:Name="LblToolDesc" Style="{StaticResource Hint}" Margin="0,0,0,8"/>
+            <DockPanel DockPanel.Dock="Bottom" Margin="0,8,0,0">
+              <TextBlock DockPanel.Dock="Top" Text="Command that will run" FontWeight="SemiBold" Margin="0,0,0,3"/>
+              <TextBox x:Name="TxtPreview" Style="{StaticResource Mono}" Height="80" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"/>
+            </DockPanel>
+
+            <Grid>
+              <!-- MFTECmd -->
+              <StackPanel x:Name="PnlMft" Visibility="Collapsed">
+                <TextBlock Text="Files to parse" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                <CheckBox x:Name="ChkMftMFT" Margin="0,2"><TextBlock><Run Text="$MFT" FontFamily="Consolas"/><Run Text="   File records: names, sizes, timestamps" Foreground="#5A636E"/></TextBlock></CheckBox>
+                <CheckBox x:Name="ChkMftJ" Margin="0,2"><TextBlock><Run Text="$J" FontFamily="Consolas"/><Run Text="     USN journal: creates, renames, deletes (uses $MFT for full paths)" Foreground="#5A636E"/></TextBlock></CheckBox>
+                <CheckBox x:Name="ChkMftLogFile" Margin="0,2"><TextBlock><Run Text="$LogFile" FontFamily="Consolas"/><Run Text="  NTFS transaction log" Foreground="#5A636E"/></TextBlock></CheckBox>
+                <CheckBox x:Name="ChkMftBoot" Margin="0,2"><TextBlock><Run Text="$Boot" FontFamily="Consolas"/><Run Text="   Volume boot record" Foreground="#5A636E"/></TextBlock></CheckBox>
+                <CheckBox x:Name="ChkMftSDS" Margin="0,2"><TextBlock><Run Text="$SDS" FontFamily="Consolas"/><Run Text="    Security descriptors (owners, permissions)" Foreground="#5A636E"/></TextBlock></CheckBox>
+                <TextBlock Text="Options" FontWeight="SemiBold" Margin="0,10,0,4"/>
+                <CheckBox x:Name="ChkMftAt" Content="Include all timestamps, not only those that differ (--at)" Margin="0,2"/>
+                <CheckBox x:Name="ChkMftRs" Content="Recover records from slack space (--rs)" Margin="0,2"/>
+              </StackPanel>
+
+              <!-- EvtxECmd -->
+              <DockPanel x:Name="PnlEvtx" Visibility="Collapsed">
+                <StackPanel DockPanel.Dock="Top">
+                  <TextBlock Text="Which logs" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                  <RadioButton x:Name="RbEvtxKey" GroupName="EvtxMode" Margin="0,2">
+                    <TextBlock><Run Text="FOR508 key logs"/><Run x:Name="RunEvtxKeyHint" Text="  (list in config\EventLogs-FOR508.txt)" Foreground="#5A636E"/></TextBlock>
+                  </RadioButton>
+                  <RadioButton x:Name="RbEvtxPick" GroupName="EvtxMode" Content="Only the logs I tick below" Margin="0,2"/>
+                  <RadioButton x:Name="RbEvtxAll" GroupName="EvtxMode" Margin="0,2">
+                    <TextBlock><Run Text="Every log in the folder"/><Run x:Name="RunEvtxAllHint" Text="  (slow on large collections)" Foreground="#5A636E"/></TextBlock>
+                  </RadioButton>
+                </StackPanel>
+                <StackPanel DockPanel.Dock="Bottom" Margin="0,8,0,0">
+                  <TextBlock Text="Event ID filter" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                  <WrapPanel>
+                    <RadioButton x:Name="RbIdFor508" GroupName="EvtxIds" Margin="0,2,16,2" VerticalAlignment="Center">
+                      <TextBlock x:Name="LblIdFor508" Text="FOR508 event IDs"/>
+                    </RadioButton>
+                    <RadioButton x:Name="RbIdAll" GroupName="EvtxIds" Content="All events" Margin="0,2,16,2" VerticalAlignment="Center"/>
+                    <RadioButton x:Name="RbIdCustom" GroupName="EvtxIds" Content="Custom:" VerticalAlignment="Center"/>
+                    <TextBox x:Name="TxtCustomIds" Width="260" Margin="6,0,0,0" FontFamily="Consolas" ToolTip="Comma separated, e.g. 4624,4625,4688"/>
+                  </WrapPanel>
+                </StackPanel>
+                <DockPanel Margin="0,6,0,0">
+                  <DockPanel DockPanel.Dock="Top" Margin="0,0,0,4">
+                    <TextBlock DockPanel.Dock="Left" Text="Filter:" VerticalAlignment="Center" Foreground="#5A636E" Margin="0,0,6,0"/>
+                    <TextBlock DockPanel.Dock="Right" x:Name="LblEvtxCount" VerticalAlignment="Center" Foreground="#5A636E" Margin="8,0,0,0"/>
+                    <TextBox x:Name="TxtLogFilter" ToolTip="Type part of a log name"/>
+                  </DockPanel>
+                  <Border BorderBrush="#E1E4E8" BorderThickness="1" MinHeight="90">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                      <StackPanel x:Name="PnlLogList" Margin="6,4"/>
+                    </ScrollViewer>
+                  </Border>
+                </DockPanel>
+              </DockPanel>
+
+              <!-- RECmd -->
+              <StackPanel x:Name="PnlRecmd" Visibility="Collapsed">
+                <TextBlock Text="Batch file" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                <StackPanel Orientation="Horizontal">
+                  <ComboBox x:Name="CmbBatch" Width="320"/>
+                  <Button x:Name="BtnBatch" Content="Other .reb file..." Margin="6,0,0,0"/>
+                </StackPanel>
+                <TextBlock x:Name="LblBatchHint" Style="{StaticResource Hint}" Margin="0,6,0,0"
+                           Text="Kroll_Batch.reb is the usual choice. DFIRBatch.reb covers more keys and takes longer. Both ship with RECmd in BatchExamples."/>
+              </StackPanel>
+
+              <TextBlock x:Name="LblNoOptions" Style="{StaticResource Hint}" Visibility="Collapsed"
+                         Text="No extra options. The input is found automatically in the evidence."/>
+            </Grid>
+          </DockPanel>
+        </GroupBox>
+      </Grid>
+
+      <!-- Run bar -->
+      <DockPanel Grid.Row="2" Margin="0,10,0,6" LastChildFill="True">
+        <Button DockPanel.Dock="Left" x:Name="BtnStart" Content="Start" MinWidth="110" MinHeight="30" FontWeight="SemiBold"/>
+        <Button DockPanel.Dock="Left" x:Name="BtnCancel" Content="Cancel" MinWidth="80" MinHeight="30" Margin="6,0,0,0" IsEnabled="False"/>
+        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+          <TextBlock Text="Light tools in parallel:" VerticalAlignment="Center" Foreground="#5A636E"/>
+          <ComboBox x:Name="CmbSlots" Width="48" Margin="6,0,14,0"/>
+          <TextBlock Text="If already processed:" VerticalAlignment="Center" Foreground="#5A636E"/>
+          <ComboBox x:Name="CmbPolicy" Width="120" Margin="6,0,14,0"/>
+          <Button x:Name="BtnOpenCase" Content="Open case folder"/>
+        </StackPanel>
+        <StackPanel Margin="14,0" VerticalAlignment="Center">
+          <TextBlock x:Name="LblRun" Text="" Foreground="#2B3138"/>
+          <ProgressBar x:Name="PrgRun" Height="6" Margin="0,4,0,0" Minimum="0" Maximum="100" Value="0"/>
+        </StackPanel>
+      </DockPanel>
+
+      <GridSplitter Grid.Row="3" HorizontalAlignment="Stretch" Background="Transparent" ResizeDirection="Rows"/>
+
+      <!-- Log -->
+      <GroupBox Grid.Row="4" Header="Log">
+        <DockPanel>
+          <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,6">
+            <TextBlock Text="Show:" VerticalAlignment="Center" Foreground="#5A636E" Margin="0,0,6,0"/>
+            <ComboBox x:Name="CmbLogView" Width="280"/>
+            <Button x:Name="BtnOpenLog" Content="Open in Notepad" Margin="6,0,0,0"/>
+            <Button x:Name="BtnOpenToolDir" Content="Open tool folder" Margin="6,0,0,0"/>
+          </StackPanel>
+          <TextBox x:Name="TxtLog" Style="{StaticResource Mono}" TextWrapping="NoWrap"
+                   VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"/>
+        </DockPanel>
+      </GroupBox>
+    </Grid>
+  </DockPanel>
+</Window>

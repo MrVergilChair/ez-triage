@@ -1,0 +1,18 @@
+# Event logs processed by the "FOR508 key logs" option of EvtxECmd.
+# One file name per line. Lines starting with # are ignored. Edit freely.
+Security.evtx
+System.evtx
+Application.evtx
+Windows PowerShell.evtx
+Microsoft-Windows-PowerShell%4Operational.evtx
+Microsoft-Windows-TaskScheduler%4Operational.evtx
+Microsoft-Windows-TerminalServices-LocalSessionManager%4Operational.evtx
+Microsoft-Windows-TerminalServices-RemoteConnectionManager%4Operational.evtx
+Microsoft-Windows-TerminalServices-RDPClient%4Operational.evtx
+Microsoft-Windows-RemoteDesktopServices-RdpCoreTS%4Operational.evtx
+Microsoft-Windows-WMI-Activity%4Operational.evtx
+Microsoft-Windows-WinRM%4Operational.evtx
+Microsoft-Windows-Windows Defender%4Operational.evtx
+Microsoft-Windows-Sysmon%4Operational.evtx
+Microsoft-Windows-Bits-Client%4Operational.evtx
+Microsoft-Windows-NetworkProfile%4Operational.evtx
