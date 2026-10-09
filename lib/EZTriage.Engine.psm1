@@ -425,7 +425,13 @@ function Get-EztHiveFiles($Evidence, $Volume) {
 function Copy-EztVeloFile([string]$Src, [string]$Dst) {
     # Returns $true when the file had to be rebuilt from its .idx ranges.
     $idx = "$Src.idx"
-    if (-not (Test-Path -LiteralPath $idx)) { Copy-Item -LiteralPath $Src -Destination $Dst -Force; return $false }
+    if (-not (Test-Path -LiteralPath $idx)) {
+        Copy-Item -LiteralPath $Src -Destination $Dst -Force
+        # KAPE output is read-only; working copies must be writable (esentutl, log replay).
+        $fi = New-Object IO.FileInfo -ArgumentList $Dst
+        if ($fi.IsReadOnly) { $fi.IsReadOnly = $false }
+        return $false
+    }
     $ranges = @((Get-Content -LiteralPath $idx -Raw | ConvertFrom-Json).ranges)
     $total = [long]0; foreach ($r in $ranges) { $total += [long]$r.length }
     $in = [IO.File]::Open($Src, 'Open', 'Read', 'ReadWrite')
@@ -476,6 +482,58 @@ function Invoke-EztHiveStage($Evidence, $Volume, [string]$Dir, $State) {
     @{ Complete = $true; Evidence = $Evidence.Path; Files = $files.Count; Rebuilt = $rebuilt; Created = (Get-Date).ToString('o') } |
         ConvertTo-Json | Set-Content -LiteralPath $marker -Encoding UTF8
     Write-EztLog $State ("Registry hives for {0}: copied {1} files, {2} restored to full size from Velociraptor sparse uploads ({3:n1}s)" -f $Volume.Label, $files.Count, $rebuilt, $sw.Elapsed.TotalSeconds)
+}
+
+#endregion
+
+#region SQLite staging
+# WxTCmd and SQLECmd open databases with SQLite, which needs write access next to the
+# file (WAL/-shm) and may checkpoint the WAL into the database. That fails on read-only
+# KAPE output and would modify evidence elsewhere, so databases (plus -wal/-shm/-journal)
+# under Users are copied to <case>\_work\sqlite and parsed from there.
+
+function Test-EztSqliteFile([string]$Path) {
+    try {
+        $fs = [IO.File]::Open($Path, 'Open', 'Read', 'ReadWrite')
+        try {
+            $buf = New-Object byte[] 16
+            if ($fs.Read($buf, 0, 16) -lt 16) { return $false }
+            return ([Text.Encoding]::ASCII.GetString($buf, 0, 15) -eq 'SQLite format 3')
+        } finally { $fs.Dispose() }
+    } catch { return $false }
+}
+
+function Invoke-EztSqliteStage($Evidence, $Volume, [string]$Dir, $State) {
+    $marker = Join-Path $Dir '.eztriage-sqlite.json'
+    if (Test-Path -LiteralPath $marker) {
+        try { $m = Get-Content -LiteralPath $marker -Raw | ConvertFrom-Json; if ($m.Complete -and $m.Evidence -eq $Evidence.Path) { Write-EztLog $State "SQLite databases for $($Volume.Label): reusing copies from an earlier run"; return } } catch { }
+    }
+    if (Test-Path -LiteralPath $Dir) { Remove-Item -LiteralPath $Dir -Recurse -Force }
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    $count = 0; $bytes = [long]0
+    $stack = New-Object Collections.Stack
+    foreach ($u in @(Resolve-EztPath $Evidence $Volume 'Users')) { $stack.Push($u) }
+    while ($stack.Count) {
+        if ($State -and $State.Cancel) { throw 'Cancelled' }
+        $n = $stack.Pop()
+        $ch = Get-EztChildren $Evidence $n
+        foreach ($c in @($ch.Values)) {
+            if ($c.IsDir) { $stack.Push($c); continue }
+            if ($c.Size -lt 512 -or $c.Name -match '\.(idx|wal|shm|journal|log\d?|tmp|dll|exe|lnk|pf|evtx)$' -or $c.Name -match '-(wal|shm|journal)$') { continue }
+            if (-not (Test-EztSqliteFile $c.Path)) { continue }
+            $rel = Get-EztSafeRel (Get-EztLogicalPath $Volume $c)
+            $dst = Join-Path $Dir $rel
+            [void][IO.Directory]::CreateDirectory((Split-Path $dst))
+            [void](Copy-EztVeloFile $c.Path $dst)
+            foreach ($sfx in '-wal', '-shm', '-journal') {
+                $k = $c.Name + $sfx
+                if ($ch.ContainsKey($k)) { [void](Copy-EztVeloFile $ch[$k].Path ($dst + $sfx)) }
+            }
+            $count++; $bytes += $c.Size
+        }
+    }
+    @{ Complete = $true; Evidence = $Evidence.Path; Files = $count; Created = (Get-Date).ToString('o') } | ConvertTo-Json | Set-Content -LiteralPath $marker -Encoding UTF8
+    Write-EztLog $State ("SQLite databases for {0}: copied {1} databases ({2:n0} MB) to a working folder so the evidence is not modified ({3:n1}s)" -f $Volume.Label, $count, ($bytes / 1MB), $sw.Elapsed.TotalSeconds)
 }
 
 #endregion
@@ -658,7 +716,7 @@ function New-EztJob {
 function Get-EztToolInputs {
     # Works out what each tool would read on one volume. Returns jobs (without output paths)
     # plus a short "found" summary used by the GUI before anything runs.
-    param($Evidence, $Volume, $Tool, $Options, $ToolInfo, [bool]$MultiVolume, [string]$HiveStage = '', [string]$SrumStage = '')
+    param($Evidence, $Volume, $Tool, $Options, $ToolInfo, [bool]$MultiVolume, [string]$HiveStage = '', [string]$SrumStage = '', [string]$SqliteStage = '')
     $p = if ($MultiVolume) { "$($Volume.Key)_" } else { '' }
     $jobs = New-Object Collections.ArrayList
     $found = ''
@@ -778,6 +836,14 @@ function Get-EztToolInputs {
                 $i++; $sfx = if ($roots.Count -gt 1) { "_$i" } else { '' }
                 [void]$jobs.Add((New-EztJob $Tool "LECmd:$($Volume.Key)$sfx" 'LECmd' @('-d', $r.Path, '-q', '--csv', '{OUT}', '--csvf', "${p}LECmd_Output$sfx.csv") -LogName "LECmd$p$sfx.log" -Inputs $r.Path))
             }
+            # KAPE moves files with over-long paths to <tdest>\LongFileNames (original path in *_OriginalPathInfo.txt).
+            $top = Get-EztChildren $Evidence $Evidence.Root
+            if ($Evidence.Type -eq 'KAPE' -and $top.ContainsKey('LongFileNames') -and $Volume -eq $Evidence.Volumes[0]) {
+                $lfn = $top['LongFileNames']
+                if (@((Get-EztChildren $Evidence $lfn).Values | Where-Object { $_.Name -like '*.lnk' }).Count) {
+                    [void]$jobs.Add((New-EztJob $Tool 'LECmd:LongFileNames' 'LECmd LongFileNames' @('-d', $lfn.Path, '-q', '--csv', '{OUT}', '--csvf', 'LECmd_LongFileNames.csv') -LogName 'LECmd_LongFileNames.log' -Inputs $lfn.Path))
+                }
+            }
             $recent = @(Resolve-EztPath $Evidence $Volume 'Users\*\AppData\Roaming\Microsoft\Windows\Recent').Count
             if ($roots.Count) { $found = "$recent users with Recent" }
         }
@@ -808,14 +874,16 @@ function Get-EztToolInputs {
                 $user = '?'; for ($i = 0; $i -lt $parts.Count - 1; $i++) { if ($parts[$i] -eq 'Users') { $user = $parts[$i + 1] } }
                 $acct = Split-Path (Split-Path $db.Path) -Leaf
                 $sub = Get-EztSafeSegment "$p${user}_$acct"
-                [void]$jobs.Add((New-EztJob $Tool "WxTCmd:$($Volume.Key):$user/$acct" "WxTCmd $user" @('-f', $db.Path, '--csv', '{OUT}') -SubDir $sub -LogName "WxTCmd_$sub.log" -Inputs $db.Path))
+                $src = if ($SqliteStage) { Join-Path $SqliteStage (Get-EztSafeRel (Get-EztLogicalPath $Volume $db)) } else { $db.Path }
+                [void]$jobs.Add((New-EztJob $Tool "WxTCmd:$($Volume.Key):$user/$acct" "WxTCmd $user" @('-f', $src, '--csv', '{OUT}') -SubDir $sub -LogName "WxTCmd_$sub.log" -Inputs $db.Path))
             }
             if ($dbs.Count) { $found = "$($dbs.Count) databases" }
         }
         'SQLECmd' {
             $n = Resolve-EztFirst $Evidence $Volume @('Users')
             if ($n) {
-                [void]$jobs.Add((New-EztJob $Tool "SQLECmd:$($Volume.Key)" 'SQLECmd' @('-d', $n.Path, '--csv', '{OUT}') -SubDir $(if ($MultiVolume) { $Volume.Key } else { '' }) -LogName "SQLECmd$p.log" -Inputs $n.Path))
+                $src = if ($SqliteStage) { Join-Path $SqliteStage 'Users' } else { $n.Path }
+                [void]$jobs.Add((New-EztJob $Tool "SQLECmd:$($Volume.Key)" 'SQLECmd' @('-d', $src, '--csv', '{OUT}') -SubDir $(if ($MultiVolume) { $Volume.Key } else { '' }) -LogName "SQLECmd$p.log" -Inputs $n.Path))
                 $found = 'Users folder'
             }
         }
@@ -879,10 +947,14 @@ function New-EztPlan {
     $multi = $Evidence.Volumes.Count -gt 1
     $hiveTools = 'RECmd', 'SBECmd', 'AmcacheParser', 'AppCompatCacheParser', 'SrumECmd'
     $useStage = $Evidence.Decode -and @($ToolIds | Where-Object { $hiveTools -contains $_ }).Count
-    $prep = @()
-    $stages = @{}; $srum = @{}
+    $prep = @(); $lastPrep = @()   # the slow SQLite scan goes last so quick steps unblock tools sooner
+    $stages = @{}; $srum = @{}; $sqlite = @{}
     foreach ($v in $Evidence.Volumes) {
-        $stages[$v.Key] = ''; $srum[$v.Key] = ''
+        $stages[$v.Key] = ''; $srum[$v.Key] = ''; $sqlite[$v.Key] = ''
+        if (($ToolIds -contains 'WxTCmd' -or $ToolIds -contains 'SQLECmd') -and @(Resolve-EztPath $Evidence $v 'Users').Count) {
+            $sqlite[$v.Key] = Join-Path $CaseDir "_work\sqlite\$($v.Key)"
+            $lastPrep += [pscustomobject]@{ Kind = 'SqliteStage'; Volume = $v; Dir = $sqlite[$v.Key] }
+        }
         if ($useStage) {
             $stages[$v.Key] = Join-Path $CaseDir "_work\hives\$($v.Key)"
             $prep += [pscustomobject]@{ Kind = 'HiveStage'; Volume = $v; Dir = $stages[$v.Key] }
@@ -892,6 +964,7 @@ function New-EztPlan {
             $prep += [pscustomobject]@{ Kind = 'SrumRepair'; Volume = $v; Dir = $srum[$v.Key] }
         }
     }
+    $prep += $lastPrep
     $tools = New-Object Collections.ArrayList
     foreach ($id in $ToolIds) {
         $t = $catalog | Where-Object Id -eq $id
@@ -900,10 +973,12 @@ function New-EztPlan {
         $jobs = @()
         foreach ($v in $Evidence.Volumes) {
             $hs = if ($hiveTools -contains $id) { $stages[$v.Key] } else { '' }
-            $vj = @((Get-EztToolInputs -Evidence $Evidence -Volume $v -Tool $t -Options $Options -ToolInfo $ToolInfo -MultiVolume $multi -HiveStage $hs -SrumStage $srum[$v.Key]).Jobs)
+            $qs = if ($id -in 'WxTCmd', 'SQLECmd') { $sqlite[$v.Key] } else { '' }
+            $vj = @((Get-EztToolInputs -Evidence $Evidence -Volume $v -Tool $t -Options $Options -ToolInfo $ToolInfo -MultiVolume $multi -HiveStage $hs -SrumStage $srum[$v.Key] -SqliteStage $qs).Jobs)
             # Jobs that read prepared copies wait for that preparation step only.
             $req = @()
             if ($hs) { $req += "HiveStage:$($v.Key)" }
+            if ($qs) { $req += "SqliteStage:$($v.Key)" }
             if ($id -eq 'SrumECmd' -and $srum[$v.Key]) { $req += "SrumRepair:$($v.Key)" }
             foreach ($j in $vj) { $j.Requires = $req }
             $jobs += $vj
@@ -1050,6 +1125,7 @@ function Invoke-EztPlan {
                         try {
                             if ($pp.Kind -eq 'HiveStage') { Invoke-EztHiveStage -Evidence $Evidence -Volume $pp.Volume -Dir $pp.Dir -State $State }
                             if ($pp.Kind -eq 'SrumRepair') { Invoke-EztSrumRepair -Evidence $Evidence -Volume $pp.Volume -Dir $pp.Dir -State $State }
+                            if ($pp.Kind -eq 'SqliteStage') { Invoke-EztSqliteStage -Evidence $Evidence -Volume $pp.Volume -Dir $pp.Dir -State $State }
                         } catch { Write-EztLog $State "$($pp.Kind) failed: $($_.Exception.Message)" 'WARN' }
                         $State.PrepDone[$key] = $true
                     }
@@ -1243,6 +1319,9 @@ function Complete-EztRun($State, $Run, [bool]$Cancelled) {
     elseif ($outputs.Count -eq 0 -and $Run.FailHint) {
         $j.Status = 'Failed'
         $j.Detail = $Run.FailHint; if ($j.Detail.Length -gt 180) { $j.Detail = $j.Detail.Substring(0, 180) + '...' }
+        if ($j.ToolId -eq 'AppCompatCacheParser' -and $j.Detail -match 'Index and count|out of bounds') {
+            $j.Detail = 'the ShimCache value in this SYSTEM hive is incomplete, usually because the live hive was copied mid-write. Re-collect, or use a raw (KAPE) copy'
+        }
     }
     elseif ($outputs.Count -eq 0) {
         $j.Status = 'NoOutput'

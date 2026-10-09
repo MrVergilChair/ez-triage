@@ -504,6 +504,9 @@ function Update-Preview {
         if ($plan.Prep.Count -and $S.Focus -in 'RECmd', 'SBECmd', 'AmcacheParser', 'AppCompatCacheParser', 'SrumECmd') {
             $text = "# hives are first copied to <case>\_work\hives and restored to full size (Velociraptor stores them trimmed)`r`n" + $text
         }
+        if ($S.Focus -in 'WxTCmd', 'SQLECmd' -and @($plan.Prep | Where-Object Kind -eq 'SqliteStage').Count) {
+            $text = "# databases are first copied to <case>\_work\sqlite so SQLite never touches the evidence`r`n" + $text
+        }
         $ui.TxtPreview.Text = $text
     } catch { $ui.TxtPreview.Text = "Could not build the command: $($_.Exception.Message)" }
 }
