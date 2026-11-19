@@ -6,6 +6,9 @@
     .\Invoke-EZTriage.ps1 -ToolsPath C:\Tools\net -Evidence D:\Collection.zip -CaseDir D:\Cases\Host1 -Preset 'FOR508 triage'
 .EXAMPLE
     .\Invoke-EZTriage.ps1 -ToolsPath C:\Tools\net -Evidence F:\ -CaseDir D:\Cases\Host1 -Tools EvtxECmd -EvtxIdMode All
+.NOTES
+    Exit code 0: every selected tool ran ("done with warnings" and "no output" count as ran).
+    Exit code 1: a tool failed, was cancelled or is not installed, the run stopped, or the arguments were invalid.
 #>
 [CmdletBinding()]
 param(
@@ -29,15 +32,26 @@ $MftFiles = @($MftFiles -split ',' | ForEach-Object { $_.Trim() } | Where-Object
 $Tools = @($Tools -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 Import-Module (Join-Path $PSScriptRoot 'lib\EZTriage.Engine.psm1') -Force
 
+# Unknown names are an error: a typo must not fall back to the full triage or run nothing.
+$presets = Get-EztPresets
+$catalogIds = @(Get-EztCatalog | ForEach-Object Id)
+$ids = @()
+if ($Preset) {
+    $name = @($presets.Keys | Where-Object { $_ -eq $Preset })[0]
+    if (-not $name) { throw "Unknown preset '$Preset'. Valid presets: $(($presets.Keys | ForEach-Object { "'$_'" }) -join ', ')" }
+    $ids += $presets[$name]
+}
+foreach ($t in $Tools) {
+    $id = @($catalogIds | Where-Object { $_ -eq $t })[0]
+    if (-not $id) { throw "Unknown tool '$t'. Valid tools: $($catalogIds -join ', ')" }
+    $ids += $id
+}
+if (-not $ids) { $ids = $presets['FOR508 triage'] }
+$ids = @($ids | Select-Object -Unique)
+
 $toolInfo = Find-EztTools -Path $ToolsPath
 if (-not $toolInfo.Tools.Count) { throw "No EZ Tools found under $ToolsPath" }
 if (-not $toolInfo.DotNet.Ok) { Write-Warning $toolInfo.DotNet.Message }
-
-$ids = @()
-if ($Preset) { $ids += (Get-EztPresets)[$Preset] }
-if ($Tools) { $ids += $Tools }
-if (-not $ids) { $ids = (Get-EztPresets)['FOR508 triage'] }
-$ids = @($ids | Select-Object -Unique)
 
 $opt = Get-EztDefaultOptions
 $opt.MftFiles = $MftFiles; $opt.EvtxMode = $EvtxMode; $opt.EvtxIdMode = $EvtxIdMode
@@ -84,3 +98,16 @@ try {
     $runner.Streams.Error | ForEach-Object { Write-Warning $_.ToString() }
     $runner.Dispose()
 }
+
+# Exit code for scripts and scheduled tasks (see .NOTES).
+$problems = @()
+if ($state.Error) { $problems += "run stopped: $($state.Error)" }
+foreach ($tp in $plan.Tools) {
+    if ($tp.Missing) { $problems += "$($tp.Tool.Id) not installed"; continue }
+    foreach ($j in $tp.Jobs) { if ($j.Status -in 'Failed', 'Cancelled') { $problems += "$($j.Label) $(Get-EztStatusText $j.Status)" } }
+}
+if ($problems) {
+    Write-Host "Exit code 1: $($problems -join '; ')" -ForegroundColor Red
+    exit 1
+}
+exit 0

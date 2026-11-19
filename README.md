@@ -110,6 +110,8 @@ Heavy tools (MFTECmd, EvtxECmd, RECmd) run one at a time, starting with the larg
 
 Other parameters: `-EvtxMode Key|All`, `-EvtxCustomIds 4624,4625`, `-RecmdBatch DFIRBatch.reb`, `-IfAlreadyRan Skip|NewFolder|Overwrite`, `-LightSlots 1-8`. `-PlanOnly` prints the commands without running anything.
 
+An unknown `-Preset` or `-Tools` name stops with the list of valid names. The exit code is `0` when every selected tool ran ("done with warnings" and "no output" count as ran) and `1` when a tool failed, was cancelled or is not installed, or the run stopped, so scripts and scheduled tasks can check `$LASTEXITCODE`.
+
 The window also accepts `-ToolsPath`, `-Evidence` and `-CaseDir`, so a shortcut can open straight onto a collection:
 
 ```
