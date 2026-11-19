@@ -10,8 +10,9 @@ A small Windows tool that runs [Eric Zimmerman's forensic tools](https://ericzim
 ## Requirements
 
 - Windows 10 or 11 with Windows PowerShell 5.1 (built in).
-- [EZ Tools](https://ericzimmerman.github.io/) downloaded separately. They are not included in this repository. The .NET 9 build (`net9` folder) is what this was tested with.
-- The .NET runtime those tools need (.NET 9 for the `net9` build). EZ Triage checks for it and warns if it is missing.
+- [EZ Tools](https://ericzimmerman.github.io/) downloaded separately. They are not included in this repository. `Get-ZimmermanTools.ps1` now downloads the .NET 10 build into a `net` folder. That is what this is tested with. Older `net9` downloads still work.
+- The .NET runtime those tools need (.NET 10 for the `net` build, .NET 9 for an older `net9` build). EZ Triage checks for it and warns if it is missing.
+- **Windows on ARM** (for example a Parallels VM on an Apple Silicon Mac): the EZ Tools are x64 programs, so install the **x64** .NET Runtime. The ARM64 runtime alone is not enough. EZ Triage tells you if only the ARM64 one is installed.
 
 ## Getting started
 
@@ -102,9 +103,9 @@ Heavy tools (MFTECmd, EvtxECmd, RECmd) run one at a time, starting with the larg
 `Invoke-EZTriage.ps1` uses the same engine without the window, which is handy for scripting:
 
 ```powershell
-.\Invoke-EZTriage.ps1 -ToolsPath C:\Tools\net9 -Evidence D:\Collection.zip -CaseDir D:\Cases\Host1
-.\Invoke-EZTriage.ps1 -ToolsPath C:\Tools\net9 -Evidence F:\ -CaseDir D:\Cases\Host1 -Preset 'Event logs' -EvtxIdMode All
-.\Invoke-EZTriage.ps1 -ToolsPath C:\Tools\net9 -Evidence F:\ -CaseDir D:\Cases\Host1 -Tools MFTECmd -MftFiles MFT,J -PlanOnly
+.\Invoke-EZTriage.ps1 -ToolsPath C:\Tools\net -Evidence D:\Collection.zip -CaseDir D:\Cases\Host1
+.\Invoke-EZTriage.ps1 -ToolsPath C:\Tools\net -Evidence F:\ -CaseDir D:\Cases\Host1 -Preset 'Event logs' -EvtxIdMode All
+.\Invoke-EZTriage.ps1 -ToolsPath C:\Tools\net -Evidence F:\ -CaseDir D:\Cases\Host1 -Tools MFTECmd -MftFiles MFT,J -PlanOnly
 ```
 
 Other parameters: `-EvtxMode Key|All`, `-EvtxCustomIds 4624,4625`, `-RecmdBatch DFIRBatch.reb`, `-IfAlreadyRan Skip|NewFolder|Overwrite`, `-LightSlots 1-8`. `-PlanOnly` prints the commands without running anything.
@@ -122,7 +123,8 @@ Settings (tools folder, last selection, options) are saved in `%APPDATA%\EZTriag
 - **AppCompatCacheParser says the ShimCache value is incomplete.** The SYSTEM hive was copied from a live system while Windows was rewriting that value. The rest of the hive is fine. Collect again, or use a KAPE copy.
 - **MFTECmd finds nothing on a mounted drive.** `$MFT` and `$J` are hidden on a drive mounted by Windows. Collect them with KAPE or Velociraptor first.
 - **Disk images (E01, VHDX, VMDK)** are not read directly. Mount them first and point EZ Triage at the drive letter.
-- **".NET 9 runtime NOT found".** Install the .NET 9 Runtime from Microsoft, or use the EZ Tools build that matches the runtime you have.
+- **".NET 10 runtime NOT found"** (or another version). Install that .NET Runtime from Microsoft, or use the EZ Tools build that matches the runtime you have.
+- **"...found, but only the ARM64 version"** (Windows on ARM). Install the x64 .NET Runtime of that version as well. It installs next to the ARM64 one, in `C:\Program Files\dotnet\x64`.
 - **"Done with warnings".** Open the tool's log (Show > tool name). Typical messages such as empty jump lists or unmapped ShellBag GUIDs do not mean data is missing.
 
 ## Credits

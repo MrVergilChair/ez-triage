@@ -125,14 +125,60 @@ function Test-EztDotNet($Tools) {
         if (-not $fw) { $fw = @($j.runtimeOptions.frameworks)[0] }
         $major = ($fw.version -split '\.')[0]
     } catch { return [pscustomobject]@{ Ok = $true; Needed = ''; Message = '' } }
-    $roots = @("$env:ProgramFiles\dotnet\shared\Microsoft.NETCore.App")
-    if ($env:DOTNET_ROOT) { $roots += (Join-Path $env:DOTNET_ROOT 'shared\Microsoft.NETCore.App') }
-    $found = $false
-    foreach ($r in $roots) {
-        if ((Test-Path -LiteralPath $r) -and (Get-ChildItem -LiteralPath $r -Directory -Filter "$major.*" -ErrorAction SilentlyContinue)) { $found = $true }
+
+    # The tool's .exe launcher looks for a runtime of its own architecture. On ARM64 Windows,
+    # x64 tools (the EZ Tools builds) need the x64 runtime, which lives in dotnet\x64, not the
+    # native ARM64 runtime in dotnet\.
+    $osArch = Get-EztOsArchitecture
+    $exeArch = Get-EztExeArchitecture $exe
+    $pf = if ($env:ProgramW6432) { $env:ProgramW6432 } else { $env:ProgramFiles }
+    $native = @(Join-Path $pf 'dotnet')
+    if ($env:DOTNET_ROOT) { $native += $env:DOTNET_ROOT }
+    $dirs = $native
+    $archNote = ''
+    if ($osArch -eq 'ARM64' -and $exeArch -eq 'x64') {
+        $dirs = @(Join-Path $pf 'dotnet\x64')
+        if ($env:DOTNET_ROOT_X64) { $dirs += $env:DOTNET_ROOT_X64 }
+        $archNote = 'x64 '
+    } elseif ($exeArch -eq 'x86' -and $osArch -ne 'x86') {
+        $dirs = @(Join-Path ${env:ProgramFiles(x86)} 'dotnet')
+        if ($env:DOTNET_ROOT_X86) { $dirs += $env:DOTNET_ROOT_X86 }
+        $archNote = 'x86 '
     }
-    $msg = if ($found) { ".NET $major runtime found" } else { ".NET $major runtime NOT found. Install the .NET $major Runtime or the tools will not start." }
+    $found = Test-EztRuntimeIn -Dirs $dirs -Major $major
+    $msg = if ($found) { ".NET $major ${archNote}runtime found" }
+    elseif ($archNote -and (Test-EztRuntimeIn -Dirs $native -Major $major)) {
+        ".NET $major runtime found, but only the $osArch version. The EZ Tools are $exeArch programs: install the $exeArch .NET $major Runtime as well or the tools will not start."
+    } else { ".NET $major ${archNote}runtime NOT found. Install the ${archNote}.NET $major Runtime or the tools will not start." }
     [pscustomobject]@{ Ok = $found; Needed = $major; Message = $msg }
+}
+
+function Test-EztRuntimeIn([string[]]$Dirs, [string]$Major) {
+    foreach ($d in $Dirs) {
+        $r = Join-Path $d 'shared\Microsoft.NETCore.App'
+        if ((Test-Path -LiteralPath $r) -and (Get-ChildItem -LiteralPath $r -Directory -Filter "$Major.*" -ErrorAction SilentlyContinue)) { return $true }
+    }
+    $false
+}
+
+function Get-EztOsArchitecture {
+    # The real OS architecture, even when PowerShell itself runs emulated (x64 PowerShell on ARM64).
+    try {
+        $a = (Get-ItemProperty -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment' -Name PROCESSOR_ARCHITECTURE -ErrorAction Stop).PROCESSOR_ARCHITECTURE
+    } catch { $a = $env:PROCESSOR_ARCHITECTURE }
+    switch ($a) { 'AMD64' { 'x64' } 'ARM64' { 'ARM64' } 'x86' { 'x86' } default { "$a" } }
+}
+
+function Get-EztExeArchitecture([string]$Path) {
+    # Machine field of the PE header: 0x8664 x64, 0xAA64 ARM64, 0x014C x86.
+    try {
+        $fs = [IO.File]::Open($Path, 'Open', 'Read', 'ReadWrite')
+        try {
+            $br = New-Object IO.BinaryReader $fs
+            $fs.Position = 0x3C; $fs.Position = $br.ReadInt32() + 4
+            switch ($br.ReadUInt16()) { 0x8664 { 'x64' } 0xAA64 { 'ARM64' } 0x014C { 'x86' } default { '' } }
+        } finally { $fs.Dispose() }
+    } catch { '' }
 }
 
 #endregion

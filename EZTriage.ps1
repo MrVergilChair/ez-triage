@@ -39,8 +39,12 @@ if ([Threading.Thread]::CurrentThread.ApartmentState -ne 'STA') {
 $SettingsFile = Join-Path $env:APPDATA 'EZTriage\settings.json'
 
 function Get-DefaultToolsPath {
-    foreach ($c in @((Join-Path $AppRoot 'net9'), (Join-Path (Split-Path $AppRoot) 'net9'), (Join-Path $AppRoot 'EZTools'),
-            (Join-Path (Split-Path $AppRoot) 'EZTools'), 'C:\Tools\EZTools\net9', 'C:\Tools\net9', 'C:\Tools\EZTools')) {
+    # Get-ZimmermanTools.ps1 now puts the current build in a 'net' folder; older downloads used 'net9'.
+    $parent = Split-Path $AppRoot
+    $candidates = foreach ($base in @($AppRoot, $parent, 'C:\Tools')) {
+        foreach ($sub in @('net', 'net9', 'EZTools\net', 'EZTools\net9', 'EZTools')) { Join-Path $base $sub }
+    }
+    foreach ($c in $candidates) {
         if (Test-Path -LiteralPath (Join-Path $c 'MFTECmd.exe')) { return (Resolve-Path -LiteralPath $c).Path }
     }
     ''

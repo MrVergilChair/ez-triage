@@ -3,9 +3,9 @@
 .SYNOPSIS
     Runs EZ Triage without the window (same engine as the GUI).
 .EXAMPLE
-    .\Invoke-EZTriage.ps1 -ToolsPath C:\Tools\net9 -Evidence D:\Collection.zip -CaseDir D:\Cases\Host1 -Preset 'FOR508 triage'
+    .\Invoke-EZTriage.ps1 -ToolsPath C:\Tools\net -Evidence D:\Collection.zip -CaseDir D:\Cases\Host1 -Preset 'FOR508 triage'
 .EXAMPLE
-    .\Invoke-EZTriage.ps1 -ToolsPath C:\Tools\net9 -Evidence F:\ -CaseDir D:\Cases\Host1 -Tools EvtxECmd -EvtxIdMode All
+    .\Invoke-EZTriage.ps1 -ToolsPath C:\Tools\net -Evidence F:\ -CaseDir D:\Cases\Host1 -Tools EvtxECmd -EvtxIdMode All
 #>
 [CmdletBinding()]
 param(
