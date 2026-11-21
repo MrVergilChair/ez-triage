@@ -30,6 +30,16 @@ The launcher bypasses the PowerShell execution policy for this one process only.
 4. **Tools.** Pick a preset or tick tools yourself. Click a tool's name to see its options and the exact command that will run.
 5. **Start.** Progress and a live log appear at the bottom. Use **Show** to switch between the combined log and any single tool's log. **Open in Timeline Explorer** opens that tool's CSV output (or, with "All tools", lets you pick from every CSV). It is enabled when `TimelineExplorer.exe` is in the EZ Tools folder, which is where `Get-ZimmermanTools.ps1` puts it.
 
+### Several collections at once
+
+Click **ZIP...** and select several ZIPs with Ctrl or Shift. Pick your tools and options once, choose a folder as the case folder, and click **Start**: the same tools and options run on every collection, one collection at a time, each into its own `<name>_EZTriage` folder inside the case folder. Resource use is the same as for one collection; only the total time adds up.
+
+- The tool list and command preview are based on the first collection.
+- The progress line shows which collection is running (`[2/3] ...`). **Cancel** stops the current collection and skips the rest.
+- The log ends with a summary: each collection, OK or the problem, and its case folder.
+- **If already processed: Ask** counts as **Skip** here, since you cannot be asked for every collection. Choose New folder or Overwrite to run them again.
+- With **All tools** selected under Show, **Open in Timeline Explorer** lists the CSVs of every collection.
+
 ### Presets
 
 | Preset | Tools |

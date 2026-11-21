@@ -95,7 +95,7 @@ $script:S = @{
     Settings = Read-Settings; ToolInfo = $null; Evidence = $null; EvidenceLoading = $false; EvidenceSeq = 0
     Avail = @{}; EvidenceLogs = @(); Previous = @{}; Rows = @{}; LogRows = @{}; PresetButtons = @{}
     Focus = 'EvtxECmd'; Selected = New-Object 'System.Collections.Generic.List[string]'
-    Bg = New-Object Collections.ArrayList; Run = $null; Plan = $null
+    Bg = New-Object Collections.ArrayList; Run = $null; Plan = $null; Batch = $null
     AllLog = New-Object Text.StringBuilder; LogItems = @{}; ViewPath = ''; ViewSize = -1; Suspend = $false
 }
 $S.Options = $S.Settings.Options
@@ -199,16 +199,54 @@ function Get-DefaultCaseDir([string]$EvidencePath) {
     Join-Path $root "${leaf}_EZTriage"
 }
 
-function Get-ExtractDir {
-    $ev = $ui.TxtEvidence.Text.Trim().Trim('"')
-    if ($ev -notlike '*.zip' -or -not $ui.TxtCase.Text.Trim()) { return $null }
-    Join-Path $ui.TxtCase.Text.Trim() ('Evidence\' + [IO.Path]::GetFileNameWithoutExtension($ev))
+function Get-CaseDirFor([string]$EvidencePath) {
+    # With several collections the case box holds a parent folder; each collection gets
+    # <name>_EZTriage inside it (the same layout as Invoke-EZTriage.ps1 -CaseRoot).
+    $c = $ui.TxtCase.Text.Trim().Trim('"')
+    if (-not $c) { return '' }
+    if ($S.Batch) {
+        $leaf = if ($EvidencePath -like '*.zip') { [IO.Path]::GetFileNameWithoutExtension($EvidencePath) } else { Split-Path $EvidencePath.TrimEnd('\') -Leaf }
+        return Join-Path $c "${leaf}_EZTriage"
+    }
+    $c
 }
 
-function Set-Evidence([string]$Path, [bool]$ResetCase = $true) {
+function Get-ExtractDir {
+    $ev = if ($S.Batch) { $S.Batch[0] } else { $ui.TxtEvidence.Text.Trim().Trim('"') }
+    $case = Get-CaseDirFor $ev
+    if ($ev -notlike '*.zip' -or -not $case) { return $null }
+    Join-Path $case ('Evidence\' + [IO.Path]::GetFileNameWithoutExtension($ev))
+}
+
+function Clear-Batch {
+    $S.Batch = $null
+    $ui.TxtEvidence.IsReadOnly = $false
+}
+
+function Set-EvidenceBatch([string[]]$Paths, [bool]$ResetCase = $true) {
+    # Several ZIPs: the same tools and options run on each, one at a time. The tool list
+    # and command preview are worked out from the first collection.
+    $S.Batch = @($Paths | Sort-Object)
+    $ui.TxtEvidence.IsReadOnly = $true
+    if ($ResetCase) {
+        $root = $S.Settings.CaseRoot
+        if (-not $root -or -not (Test-Path -LiteralPath $root)) { $root = Split-Path $S.Batch[0] }
+        $ui.TxtCase.Text = $root
+    }
+    $names = @($S.Batch | ForEach-Object { Split-Path $_ -Leaf })
+    Set-Evidence $S.Batch[0] $false ("{0} collections: {1}" -f $names.Count, ($names -join ';  '))
+}
+
+function Update-EvidenceSelection {
+    # Re-read the current selection (after the tools or case folder changed).
+    if ($S.Batch) { Set-EvidenceBatch $S.Batch $false }
+    elseif ($ui.TxtEvidence.Text.Trim()) { Set-Evidence $ui.TxtEvidence.Text $false }
+}
+
+function Set-Evidence([string]$Path, [bool]$ResetCase = $true, [string]$Display = '') {
     $Path = $Path.Trim().Trim('"')
     if ($Path -match '^[A-Za-z]:$') { $Path += '\' }
-    $ui.TxtEvidence.Text = $Path
+    $ui.TxtEvidence.Text = $(if ($Display) { $Display } else { $Path })
     $S.Evidence = $null; $S.Avail = @{}; $S.EvidenceLogs = @()
     if (-not $Path) { $ui.LblEvidence.Text = 'A KAPE or Velociraptor collection (folder or ZIP), or a mounted drive.'; Update-All; return }
     if ($ResetCase) { $ui.TxtCase.Text = Get-DefaultCaseDir $Path }
@@ -218,6 +256,7 @@ function Set-Evidence([string]$Path, [bool]$ResetCase = $true) {
     $ui.LblEvidence.Foreground = $Brush.Muted
     $ui.LblEvidence.Text = 'Reading evidence...'
     $toolsPath = if ($S.ToolInfo) { $S.ToolInfo.Path } else { '' }
+    $prefix = if ($S.Batch) { "$($S.Batch.Count) collections selected. The tool list and commands below are based on the first one, $(Split-Path $Path -Leaf).`n" } else { '' }
     Start-Background -Script {
         param($EnginePath, $Path, $ExtractTo, $ToolsPath, $Options)
         Import-Module $EnginePath
@@ -240,7 +279,7 @@ function Set-Evidence([string]$Path, [bool]$ResetCase = $true) {
         if ($err) { $ui.LblEvidence.Text = "Could not read evidence: $($err.Message)"; $ui.LblEvidence.Foreground = $Brush.Bad; Update-All; return }
         if ($r.Evidence.Error) { $ui.LblEvidence.Text = $r.Evidence.Error; $ui.LblEvidence.Foreground = $Brush.Bad; Update-All; return }
         $S.Evidence = $r.Evidence; $S.Avail = $r.Avail; $S.EvidenceLogs = @($r.Logs)
-        $text = "Detected: $($r.Evidence.Description)"
+        $text = "${prefix}Detected: $($r.Evidence.Description)"
         if ($r.Evidence.IsZip -and -not $r.Evidence.Extracted) { $text += '. The ZIP is extracted once into the case folder when you start.' }
         elseif ($r.Evidence.Extracted) { $text += '. Using the copy extracted earlier.' }
         if ($r.Evidence.Warnings.Count) { $text += "`n" + ($r.Evidence.Warnings -join "`n") }
@@ -256,6 +295,11 @@ function Set-Evidence([string]$Path, [bool]$ResetCase = $true) {
 function Update-CaseInfo {
     $S.Previous = @{}
     $case = $ui.TxtCase.Text.Trim()
+    if ($S.Batch) {
+        $ui.LblCase.Text = if ($case) { "Each of the $($S.Batch.Count) collections gets its own folder in here (<name>_EZTriage). Tools already processed in a collection's folder are skipped unless 'If already processed' is New folder or Overwrite." } else { 'Choose a folder. Each collection gets its own case folder in it.' }
+        Update-LogViewList
+        return
+    }
     if (-not $case) { $ui.LblCase.Text = 'Output goes here, one folder per tool.'; return }
     if (-not (Test-Path -LiteralPath $case)) { $ui.LblCase.Text = 'New case folder. It is created when you start.'; Update-LogViewList; return }
     foreach ($t in $catalog) {
@@ -362,7 +406,7 @@ function Get-ToolRunStatus([string]$Id) {
 }
 
 function Update-ToolRows {
-    $running = $S.Run -and -not $S.Run.State.Done
+    $running = Test-RunActive
     foreach ($t in $catalog) {
         $row = $S.Rows[$t.Id]
         $installed = $S.ToolInfo -and $S.ToolInfo.Tools[$t.Id]
@@ -505,7 +549,8 @@ function Update-Preview {
     if ($S.EvidenceLoading) { $ui.TxtPreview.Text = 'Reading evidence...'; return }
     if (-not $S.Evidence) { $ui.TxtPreview.Text = 'Choose evidence to see the exact commands.'; return }
     try {
-        $case = $ui.TxtCase.Text.Trim(); if (-not $case) { $case = '<case folder>' }
+        $case = if ($S.Batch) { Get-CaseDirFor $S.Batch[0] } else { $ui.TxtCase.Text.Trim() }
+        if (-not $case) { $case = '<case folder>' }
         $plan = New-EztPlan -Evidence $S.Evidence -CaseDir $case -ToolIds @($S.Focus) -ToolInfo $S.ToolInfo -Options $S.Options
         $text = Get-EztCommandPreview -Plan $plan -ToolId $S.Focus
         if ($plan.Prep.Count -and $S.Focus -in 'RECmd', 'SBECmd', 'AmcacheParser', 'AppCompatCacheParser', 'SrumECmd') {
@@ -600,8 +645,10 @@ function Get-OutputCsvs {
     $case = $ui.TxtCase.Text.Trim()
     $item = $ui.CmbLogView.SelectedItem
     if (-not $case -or -not (Test-Path -LiteralPath $case)) { return @() }
+    # With several collections, "All tools" covers every <name>_EZTriage folder in the parent folder.
+    $cases = if ($S.Batch) { @(Get-ChildItem -LiteralPath $case -Directory -Filter '*_EZTriage' -ErrorAction SilentlyContinue | ForEach-Object FullName) } else { @($case) }
     $dirs = if ($item -and $item.Tag -ne '*') { @(Split-Path ([string]$item.Tag)) }
-    else { @($catalog | ForEach-Object { $_.Category } | Select-Object -Unique | ForEach-Object { Join-Path $case $_ } | Where-Object { Test-Path -LiteralPath $_ }) }
+    else { @(foreach ($c in $cases) { $catalog | ForEach-Object { $_.Category } | Select-Object -Unique | ForEach-Object { Join-Path $c $_ } | Where-Object { Test-Path -LiteralPath $_ } }) }
     @(foreach ($d in $dirs) { Get-ChildItem -LiteralPath $d -Filter '*.csv' -File -Recurse -ErrorAction SilentlyContinue }) | Sort-Object FullName
 }
 
@@ -680,6 +727,7 @@ function Start-Run {
     if (-not $S.ToolInfo.DotNet.Ok) {
         if ((Show-Message "$($S.ToolInfo.DotNet.Message)`n`nStart anyway?" 'Warning' 'YesNo') -ne 'Yes') { return }
     }
+    if ($S.Batch) { Start-BatchRun $case $ids; return }
     $evRoot = $S.Evidence.Path.TrimEnd('\')
     if ($case.StartsWith($evRoot + '\', [StringComparison]::OrdinalIgnoreCase) -and -not $S.Evidence.IsZip) {
         if ((Show-Message "The case folder is inside the evidence folder. Output would mix with the evidence.`n`nContinue anyway?" 'Warning' 'YesNo') -ne 'Yes') { return }
@@ -711,6 +759,104 @@ function Start-Run {
     Set-Running $true
 }
 
+function Start-BatchRun([string]$Root, [string[]]$Ids) {
+    # Runs the same tools and options on every selected collection, one at a time, in one
+    # background runspace. Nobody can be asked per collection, so "Ask" means Skip here.
+    Read-OptionsFromUi
+    Save-Settings
+    $policy = switch ([string]$ui.CmbPolicy.SelectedItem) { 'New folder' { 'NewFolder' } 'Overwrite' { 'Overwrite' } default { 'Skip' } }
+    $items = @(foreach ($p in $S.Batch) {
+            [pscustomobject]@{ Path = $p; Name = (Split-Path $p -Leaf); Case = (Get-CaseDirFor $p); Status = 'Queued'; Detail = ''; Time = '' }
+        })
+    $batch = [hashtable]::Synchronized(@{
+            Items = $items; Index = 0; State = $null; Plan = $null; Done = $false; Cancel = $false
+            LogQueue = New-Object 'System.Collections.Concurrent.ConcurrentQueue[string]'
+        })
+    $ps = [powershell]::Create()
+    [void]$ps.AddScript({
+            param($EnginePath, $Batch, $Ids, $ToolInfo, $Options, $Policy, $Slots)
+            Import-Module $EnginePath
+            $n = 0
+            foreach ($it in $Batch.Items) {
+                $n++
+                if ($Batch.Cancel) { $it.Status = 'Cancelled'; continue }
+                $Batch.Index = $n; $it.Status = 'Running'
+                $sw = [Diagnostics.Stopwatch]::StartNew()
+                $Batch.LogQueue.Enqueue("===== [$n/$($Batch.Items.Count)] $($it.Name) =====")
+                $problems = @()
+                try {
+                    $extract = if ($it.Path -like '*.zip') { Join-Path $it.Case ('Evidence\' + [IO.Path]::GetFileNameWithoutExtension($it.Path)) } else { $null }
+                    $ev = Open-EztEvidence -Path $it.Path -ExtractTo $extract
+                    if ($ev.Error) { throw $ev.Error }
+                    $plan = New-EztPlan -Evidence $ev -CaseDir $it.Case -ToolIds $Ids -ToolInfo $ToolInfo -Options $Options
+                    if ($plan.Conflicts) { Set-EztConflictPolicy -Plan $plan -Policy $Policy }
+                    $state = New-EztState
+                    $state.LogQueue = $Batch.LogQueue   # one log stream for the whole batch
+                    $Batch.Plan = $plan; $Batch.State = $state
+                    if ($Batch.Cancel) { $it.Status = 'Cancelled'; continue }
+                    Invoke-EztPlan -Plan $plan -State $state -LightSlots $Slots
+                    if ($state.Error) { $problems += "run stopped: $($state.Error)" }
+                    foreach ($tp in $plan.Tools) {
+                        if ($tp.Missing) { $problems += "$($tp.Tool.Id) not installed"; continue }
+                        foreach ($j in $tp.Jobs) { if ($j.Status -in 'Failed', 'Cancelled') { $problems += "$($j.Label) $(Get-EztStatusText $j.Status)" } }
+                    }
+                } catch {
+                    $problems += "could not process: $($_.Exception.Message)"
+                    $Batch.LogQueue.Enqueue("$((Get-Date).ToString('HH:mm:ss'))  ERROR $($it.Name): $($_.Exception.Message)")
+                }
+                $it.Time = Format-EztDuration $sw.Elapsed
+                $it.Status = if ($Batch.Cancel) { 'Cancelled' } elseif ($problems) { 'Problem' } else { 'OK' }
+                $it.Detail = if ($problems) { $problems -join '; ' } else { $it.Case }
+            }
+            $Batch.Done = $true
+        }.ToString()).AddArgument($EnginePath).AddArgument($batch).AddArgument($Ids).AddArgument($S.ToolInfo).AddArgument($S.Options).AddArgument($policy).AddArgument([int]$ui.CmbSlots.SelectedItem)
+    $S.Plan = $null
+    [void]$S.AllLog.Clear()
+    $S.Run = @{ PS = $ps; Handle = $ps.BeginInvoke(); State = $null; Batch = $batch; Started = Get-Date }
+    Update-LogViewList
+    $ui.CmbLogView.SelectedItem = $S.LogItems['*']
+    $ui.TxtLog.Text = ''
+    if ([string]$ui.CmbPolicy.SelectedItem -eq 'Ask') { $ui.LblStatus.Text = "Running $($items.Count) collections. 'If already processed' is Ask, so tools already processed in a collection's folder are skipped." }
+    Set-Running $true
+}
+
+function Complete-BatchRun($Run) {
+    $b = $Run.Batch
+    $line = $null; $tail = New-Object Text.StringBuilder
+    while ($b.LogQueue.TryDequeue([ref]$line)) { [void]$tail.AppendLine($line) }
+    try { $Run.PS.EndInvoke($Run.Handle) | Out-Null } catch { [void]$tail.AppendLine("ERROR $($_.Exception.Message)") }
+    if ($Run.PS.Streams.Error.Count) { [void]$tail.AppendLine("ERROR " + $Run.PS.Streams.Error[0].ToString()) }
+    $Run.PS.Dispose()
+    $items = @($b.Items)
+    $ok = @($items | Where-Object Status -eq 'OK').Count
+    $bad = @($items | Where-Object Status -eq 'Problem')
+    $cancelled = @($items | Where-Object Status -eq 'Cancelled').Count
+    $elapsed = Format-EztDuration ((Get-Date) - $Run.Started)
+    $summary = "Finished $($items.Count) collections in ${elapsed}: $ok OK" + $(if ($bad.Count) { ", $($bad.Count) with problems" }) + $(if ($cancelled) { ", $cancelled cancelled" })
+    [void]$tail.AppendLine('')
+    [void]$tail.AppendLine('===== Summary =====')
+    foreach ($it in $items) { [void]$tail.AppendLine(('{0,-9} {1,-8} {2}  {3}' -f $it.Status, $it.Time, $it.Name, $it.Detail)) }
+    [void]$tail.AppendLine($summary)
+    [void]$S.AllLog.Append($tail.ToString())
+    if ($ui.CmbLogView.SelectedItem -and $ui.CmbLogView.SelectedItem.Tag -eq '*') { $ui.TxtLog.AppendText($tail.ToString()); $ui.TxtLog.ScrollToEnd(); $S.ViewPath = '*' }
+    $S.Run = $null
+    $S.Plan = $null   # the tool list goes back to what the first collection contains
+    $ui.PrgRun.IsIndeterminate = $false; $ui.PrgRun.Value = 100
+    $ui.LblRun.Text = $summary
+    $ui.LblStatus.Text = if ($bad.Count) { "$summary. Problems in: $(($bad | ForEach-Object Name) -join ', ') (see the summary in the log)" } else { $summary }
+    Set-Running $false
+    Update-CaseInfo
+    [Media.SystemSounds]::Asterisk.Play()
+}
+
+function Test-RunActive {
+    # True while a run (single or several collections) is still going.
+    $r = $S.Run
+    if (-not $r) { return $false }
+    if ($r.Batch) { return -not $r.Batch.Done }
+    -not $r.State.Done
+}
+
 function Set-Running([bool]$On) {
     foreach ($c in 'TxtTools', 'BtnTools', 'TxtEvidence', 'BtnEvFolder', 'BtnEvZip', 'TxtCase', 'BtnCase', 'BtnStart', 'BtnSelectAll', 'BtnSelectNone', 'PnlMft', 'PnlEvtx', 'PnlRecmd', 'CmbSlots', 'CmbPolicy') {
         $ui[$c].IsEnabled = -not $On
@@ -723,9 +869,20 @@ function Set-Running([bool]$On) {
 function Update-Run {
     $run = $S.Run
     if (-not $run) { return }
+    $b = $run.Batch
+    if ($b) {
+        # Several collections: follow whichever one is running now.
+        if ($b.State) { $run.State = $b.State }
+        if ($b.Plan) { $S.Plan = $b.Plan }
+        # Invoke-EztPlan clears Cancel when it starts, so keep passing a cancel on.
+        if ($b.Cancel -and $b.State -and -not $b.State.Cancel) { $b.State.Cancel = $true }
+    }
     $st = $run.State
+    # Plain assignments: "$x = if ...{ $queue }" would unroll the queue into its items.
+    $queue = $null
+    if ($b) { $queue = $b.LogQueue } else { $queue = $st.LogQueue }
     $line = $null; $new = New-Object Text.StringBuilder
-    while ($st.LogQueue.TryDequeue([ref]$line)) { [void]$new.AppendLine($line) }
+    while ($queue.TryDequeue([ref]$line)) { [void]$new.AppendLine($line) }
     if ($new.Length) {
         [void]$S.AllLog.Append($new.ToString())
         if ($S.ViewPath -eq '*' -or ($ui.CmbLogView.SelectedItem -and $ui.CmbLogView.SelectedItem.Tag -eq '*')) {
@@ -739,15 +896,21 @@ function Update-Run {
         }
     }
     $elapsed = Format-EztDuration ((Get-Date) - $run.Started)
+    if ($b) {
+        $cur = $b.Items[[Math]::Max(0, $b.Index - 1)]
+        $tag = "[$([Math]::Max(1, $b.Index))/$($b.Items.Count)] $($cur.Name)   "
+        if ($b.Done) { Complete-BatchRun $run; return }
+        if (-not $st -or $st.Done) { $ui.LblRun.Text = "${tag}Opening collection...  ($elapsed)"; $ui.PrgRun.IsIndeterminate = $true; Update-ToolRows; return }
+    } else { $tag = '' }
     switch ($st.Phase) {
-        'Hashing' { $ui.LblRun.Text = "Hashing evidence ZIP (SHA-256)... $($st.HashPercent)%  ($elapsed)"; $ui.PrgRun.IsIndeterminate = $false; $ui.PrgRun.Value = $st.HashPercent }
-        'Extracting' { $ui.LblRun.Text = "Extracting ZIP... $($st.ExtractPercent)%  ($elapsed)"; $ui.PrgRun.IsIndeterminate = $false; $ui.PrgRun.Value = $st.ExtractPercent }
-        'Preparing' { $ui.LblRun.Text = "Preparing registry hives...  ($elapsed)"; $ui.PrgRun.IsIndeterminate = $true }
+        'Hashing' { $ui.LblRun.Text = "${tag}Hashing evidence ZIP (SHA-256)... $($st.HashPercent)%  ($elapsed)"; $ui.PrgRun.IsIndeterminate = $false; $ui.PrgRun.Value = $st.HashPercent }
+        'Extracting' { $ui.LblRun.Text = "${tag}Extracting ZIP... $($st.ExtractPercent)%  ($elapsed)"; $ui.PrgRun.IsIndeterminate = $false; $ui.PrgRun.Value = $st.ExtractPercent }
+        'Preparing' { $ui.LblRun.Text = "${tag}Preparing registry hives...  ($elapsed)"; $ui.PrgRun.IsIndeterminate = $true }
         'Running' {
             $now = @($S.Plan.Tools | ForEach-Object { $_.Jobs } | Where-Object Status -eq 'Running' | ForEach-Object Label)
             $ui.PrgRun.IsIndeterminate = $false
             $ui.PrgRun.Value = $(if ($st.Total) { 100 * $st.Completed / $st.Total } else { 0 })
-            $ui.LblRun.Text = "$($st.Completed) of $($st.Total) done  ($elapsed)" + $(if ($now.Count) { '   Running: ' + ($now -join ', ') } else { '' })
+            $ui.LblRun.Text = "${tag}$($st.Completed) of $($st.Total) done  ($elapsed)" + $(if ($now.Count) { '   Running: ' + ($now -join ', ') } else { '' })
         }
     }
     if ($ui.CmbLogView.SelectedItem -and $ui.CmbLogView.SelectedItem.Tag -ne '*') { Show-SelectedLog $false }
@@ -778,7 +941,7 @@ function Update-All {
     Update-Preview
     $n = @($catalog | Where-Object { $S.Selected.Contains($_.Id) -and $S.ToolInfo -and $S.ToolInfo.Tools[$_.Id] }).Count
     $running = [bool]$S.Run
-    $ui.BtnStart.Content = if ($n) { "Start ($n tools)" } else { 'Start' }
+    $ui.BtnStart.Content = if ($n -and $S.Batch) { "Start ($n tools x $($S.Batch.Count) collections)" } elseif ($n) { "Start ($n tools)" } else { 'Start' }
     $ui.BtnStart.IsEnabled = (-not $running) -and $n -gt 0 -and $S.Evidence -and $S.ToolInfo
     if (-not $running -and -not $ui.LblRun.Text) { $ui.LblRun.Text = 'Ready' }
 }
@@ -805,22 +968,33 @@ foreach ($p in 'Ask', 'Skip', 'New folder', 'Overwrite') { [void]$ui.CmbPolicy.I
 $ui.CmbPolicy.SelectedItem = $S.Settings.Policy
 if ($null -eq $ui.CmbPolicy.SelectedItem) { $ui.CmbPolicy.SelectedItem = 'Ask' }
 
-$ui.BtnTools.Add_Click({ $p = Select-Folder 'Folder with the EZ Tools (MFTECmd.exe, PECmd.exe, ...)' $ui.TxtTools.Text; if ($p) { Set-ToolsFolder $p; if ($ui.TxtEvidence.Text) { Set-Evidence $ui.TxtEvidence.Text $false } } })
+$ui.BtnTools.Add_Click({ $p = Select-Folder 'Folder with the EZ Tools (MFTECmd.exe, PECmd.exe, ...)' $ui.TxtTools.Text; if ($p) { Set-ToolsFolder $p; Update-EvidenceSelection } })
 $ui.TxtTools.Add_LostFocus({ if ($ui.TxtTools.Text.Trim() -ne $S.Settings.ToolsPath -or -not $S.ToolInfo) { Set-ToolsFolder $ui.TxtTools.Text } })
-$ui.BtnEvFolder.Add_Click({ $p = Select-Folder 'Collection folder or mounted drive' $S.Settings.LastEvidenceDir; if ($p) { Set-Evidence $p } })
+$ui.BtnEvFolder.Add_Click({ $p = Select-Folder 'Collection folder or mounted drive' $S.Settings.LastEvidenceDir; if ($p) { Clear-Batch; Set-Evidence $p } })
 $ui.BtnEvZip.Add_Click({
         $d = New-Object Microsoft.Win32.OpenFileDialog
         $d.Filter = 'ZIP collections (*.zip)|*.zip|All files (*.*)|*.*'
+        $d.Multiselect = $true
+        $d.Title = 'Choose one or more ZIP collections (Ctrl or Shift for several)'
         if ($S.Settings.LastEvidenceDir -and (Test-Path -LiteralPath $S.Settings.LastEvidenceDir)) { $d.InitialDirectory = $S.Settings.LastEvidenceDir }
-        if ($d.ShowDialog($Window)) { Set-Evidence $d.FileName }
+        if ($d.ShowDialog($Window)) {
+            if ($d.FileNames.Count -gt 1) { Set-EvidenceBatch $d.FileNames }
+            else { Clear-Batch; Set-Evidence $d.FileName }
+        }
     })
-$ui.TxtEvidence.Add_LostFocus({ $t = $ui.TxtEvidence.Text.Trim(); if ($t -and (-not $S.Evidence -or $S.Evidence.Path -ne $t) -and -not $S.EvidenceLoading) { Set-Evidence $t } })
+$ui.TxtEvidence.Add_LostFocus({ $t = $ui.TxtEvidence.Text.Trim(); if (-not $S.Batch -and $t -and (-not $S.Evidence -or $S.Evidence.Path -ne $t) -and -not $S.EvidenceLoading) { Set-Evidence $t } })
 $ui.BtnCase.Add_Click({
-        $p = Select-Folder 'Case folder (output goes here)' (Split-Path $ui.TxtCase.Text)
-        if ($p) { $ui.TxtCase.Text = $p; $S.Settings.CaseRoot = Split-Path $p; Update-CaseInfo; if ($S.Evidence -and $S.Evidence.IsZip) { Set-Evidence $ui.TxtEvidence.Text $false } else { Update-All } }
+        $title = if ($S.Batch) { 'Folder for the case folders (one per collection)' } else { 'Case folder (output goes here)' }
+        $p = Select-Folder $title $(if ($S.Batch) { $ui.TxtCase.Text } else { Split-Path $ui.TxtCase.Text })
+        if ($p) {
+            $ui.TxtCase.Text = $p
+            $S.Settings.CaseRoot = $(if ($S.Batch) { $p } else { Split-Path $p })
+            Update-CaseInfo
+            if ($S.Evidence -and $S.Evidence.IsZip) { Update-EvidenceSelection } else { Update-All }
+        }
     })
 $ui.TxtCase.Add_TextChanged({ Update-CaseInfo; Update-ToolRows })
-$ui.TxtCase.Add_LostFocus({ if ($S.Evidence -and $S.Evidence.IsZip -and $S.Evidence.ExtractDir -ne (Get-ExtractDir)) { Set-Evidence $ui.TxtEvidence.Text $false } else { Update-Preview } })
+$ui.TxtCase.Add_LostFocus({ if ($S.Evidence -and $S.Evidence.IsZip -and $S.Evidence.ExtractDir -ne (Get-ExtractDir)) { Update-EvidenceSelection } else { Update-Preview } })
 foreach ($tb in 'TxtTools', 'TxtEvidence', 'TxtCase') {
     $ui[$tb].Add_KeyDown({ param($src, $evt) if ($evt.Key -eq 'Return') { [void]$src.MoveFocus((New-Object Windows.Input.TraversalRequest 'Next')) } })
 }
@@ -845,7 +1019,12 @@ $ui.BtnSelectAll.Add_Click({
 $ui.BtnSelectNone.Add_Click({ $S.Selected.Clear(); $S.Settings.Preset = ''; Update-All })
 
 $ui.BtnStart.Add_Click({ try { Start-Run } catch { Show-Message "Could not start: $($_.Exception.Message)" 'Error' | Out-Null; Set-Running $false } })
-$ui.BtnCancel.Add_Click({ if ($S.Run) { $S.Run.State.Cancel = $true; $ui.LblRun.Text = 'Cancelling...' } })
+$ui.BtnCancel.Add_Click({
+        if (-not $S.Run) { return }
+        if ($S.Run.Batch) { $S.Run.Batch.Cancel = $true }
+        if ($S.Run.State) { $S.Run.State.Cancel = $true }
+        $ui.LblRun.Text = 'Cancelling...'
+    })
 $ui.BtnOpenCase.Add_Click({ $c = $ui.TxtCase.Text.Trim(); if ($c -and (Test-Path -LiteralPath $c)) { Start-Process explorer.exe -ArgumentList "`"$c`"" } else { $ui.LblStatus.Text = 'The case folder does not exist yet.' } })
 $ui.CmbLogView.Add_SelectionChanged({ Show-SelectedLog $true })
 $ui.BtnOpenLog.Add_Click({ $p = Get-SelectedLogPath; if ($p) { Start-Process notepad.exe -ArgumentList "`"$p`"" } })
@@ -873,7 +1052,8 @@ $Window.Add_Closing({
         param($src, $evt)
         if ($S.Run) {
             if ((Show-Message 'Tools are still running. Stop them and close?' 'Warning' 'YesNo') -ne 'Yes') { $evt.Cancel = $true; return }
-            $S.Run.State.Cancel = $true
+            if ($S.Run.Batch) { $S.Run.Batch.Cancel = $true }
+            if ($S.Run.State) { $S.Run.State.Cancel = $true }
             $deadline = (Get-Date).AddSeconds(5)
             while (-not $S.Run.Handle.IsCompleted -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 100 }
         }
