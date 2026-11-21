@@ -701,6 +701,7 @@ function Update-Run {
     }
     $elapsed = Format-EztDuration ((Get-Date) - $run.Started)
     switch ($st.Phase) {
+        'Hashing' { $ui.LblRun.Text = "Hashing evidence ZIP (SHA-256)... $($st.HashPercent)%  ($elapsed)"; $ui.PrgRun.IsIndeterminate = $false; $ui.PrgRun.Value = $st.HashPercent }
         'Extracting' { $ui.LblRun.Text = "Extracting ZIP... $($st.ExtractPercent)%  ($elapsed)"; $ui.PrgRun.IsIndeterminate = $false; $ui.PrgRun.Value = $st.ExtractPercent }
         'Preparing' { $ui.LblRun.Text = "Preparing registry hives...  ($elapsed)"; $ui.PrgRun.IsIndeterminate = $true }
         'Running' {

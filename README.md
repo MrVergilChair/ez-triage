@@ -59,7 +59,7 @@ The key log list and the event ID list are plain text files in `config\`. Edit t
 ```
 <case>\
   EZTriage.log                 every run, all tools, in order
-  runs\<date>_<time>.json      audit record: commands, tool versions, times, results
+  runs\<date>_<time>.json      audit record: evidence SHA-256, commands, tool versions and hashes, times, results
   FileSystem\MFTECmd\          MFT.csv, J.csv, MFTECmd_MFT.log, ...
   FileSystem\RBCmd\
   Execution\PECmd\             PECmd_Output.csv, PECmd_Output_Timeline.csv, PECmd.log
@@ -88,6 +88,7 @@ Set **If already processed** next to the Start button to choose once instead of 
 The evidence is never modified. When a tool needs something fixed first, EZ Triage works on a copy under `<case>\_work`.
 
 - **ZIP collections** are extracted once into the case folder and reused on later runs.
+- **Evidence hash.** A ZIP collection is hashed (SHA-256) at the start of every run and the hash goes into the case log and the run record, together with hashes of the tool binaries that ran, so the output can be tied to the exact collection. Folders and mounted drives are not hashed; hash them when you acquire them.
 - **Velociraptor hives.** Velociraptor stores sparse files trimmed, with an `.idx` file describing the original layout. Registry hives and their `.LOG` files lose trailing pages that way, which breaks transaction log replay. Hives are rebuilt to full size before RECmd, SBECmd, AmcacheParser, AppCompatCacheParser and SrumECmd read them.
 - **Dirty SRUM databases** (normal for a copy of a running system) are recovered with `esentutl /r`, or repaired with `esentutl /p` when the logs are incomplete, before SrumECmd parses them.
 - **SQLite databases** (Windows Timeline, browsers and others) are copied with their `-wal`/`-shm` files before WxTCmd and SQLECmd open them. SQLite needs write access next to a database and can change it, which fails on read-only KAPE output and would alter evidence elsewhere.

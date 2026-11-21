@@ -1083,7 +1083,7 @@ function Write-EztLog {
 
 function New-EztState {
     [hashtable]::Synchronized(@{
-            Cancel = $false; Done = $false; Running = $false; Phase = 'Idle'; ExtractPercent = 0
+            Cancel = $false; Done = $false; Running = $false; Phase = 'Idle'; ExtractPercent = 0; HashPercent = 0; EvidenceSha256 = ''
             LogQueue = New-Object 'System.Collections.Concurrent.ConcurrentQueue[string]'
             Jobs = @(); Total = 0; Completed = 0; Summary = ''; LogWriter = $null; CaseLog = ''; RunFile = ''
             Error = $null
@@ -1148,6 +1148,16 @@ function Invoke-EztPlan {
         Write-EztLog $State "=== EZ Triage $script:EngineVersion run started ==="
         Write-EztLog $State "Evidence: $($ev.Path) [$($ev.Description)]"
         Write-EztLog $State "Case folder: $($Plan.CaseDir)"
+
+        # Fingerprint the collection so the run record proves which evidence was processed.
+        # Folders and drives are not hashed here (hash them when you acquire them).
+        if ($ev.ZipPath) {
+            $State.Phase = 'Hashing'
+            Write-EztLog $State 'Hashing the evidence ZIP (SHA-256)'
+            $sw = [Diagnostics.Stopwatch]::StartNew()
+            $State.EvidenceSha256 = Get-EztSha256 -Path $ev.ZipPath -State $State
+            Write-EztLog $State ("Evidence SHA-256: {0} ({1:n1}s)" -f $State.EvidenceSha256, $sw.Elapsed.TotalSeconds)
+        }
 
         if ($ev.IsZip -and -not $ev.Extracted) {
             $State.Phase = 'Extracting'
@@ -1276,7 +1286,7 @@ function Invoke-EztPlan {
         $State.Summary = if ($State.Error) { 'Stopped after {0}: {1}' -f (Format-EztDuration $elapsed), $State.Error }
         else { 'Finished in {0}: {1}' -f (Format-EztDuration $elapsed), ($counts -join ', ') }
         Write-EztLog $State $State.Summary
-        try { Save-EztRunRecord $Plan $runStart $all } catch { Write-EztLog $State "Could not write run record: $($_.Exception.Message)" 'WARN' }
+        try { Save-EztRunRecord $Plan $runStart $all $State } catch { Write-EztLog $State "Could not write run record: $($_.Exception.Message)" 'WARN' }
         if ($prepRunner) {
             if ($prepHandle) { $deadline = (Get-Date).AddSeconds(30); while (-not $prepHandle.IsCompleted -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 100 } }
             try { $prepRunner.Stop() } catch { }; $prepRunner.Dispose()
@@ -1389,15 +1399,53 @@ function Complete-EztRun($State, $Run, [bool]$Cancelled) {
     Write-EztLog $State $msg $lvl
 }
 
-function Save-EztRunRecord($Plan, [datetime]$Start, $Jobs) {
+function Get-EztSha256 {
+    # SHA-256 of a file, read in chunks so a run can be cancelled while a large ZIP is hashed.
+    param([Parameter(Mandatory)][string]$Path, $State)
+    $sha = [Security.Cryptography.SHA256]::Create()
+    $fs = [IO.File]::Open($Path, 'Open', 'Read', 'ReadWrite')
+    try {
+        $buf = New-Object byte[] (4MB)
+        $done = [long]0; $len = [Math]::Max([long]1, $fs.Length)
+        while (($n = $fs.Read($buf, 0, $buf.Length)) -gt 0) {
+            if ($State -and $State.Cancel) { throw 'Cancelled' }
+            [void]$sha.TransformBlock($buf, 0, $n, $null, 0)
+            $done += $n
+            if ($State) { $State.HashPercent = [int](100.0 * $done / $len) }
+        }
+        [void]$sha.TransformFinalBlock($buf, 0, 0)
+        -join ($sha.Hash | ForEach-Object { $_.ToString('X2') })
+    } finally { $fs.Dispose(); $sha.Dispose() }
+}
+
+function Get-EztToolHashes($Plan, $Jobs) {
+    # The .exe of each tool that ran plus its .dll (where the code of the .NET builds lives).
+    $seen = @{}
+    foreach ($j in @($Jobs | Where-Object { $_.Arguments -and $_.Exe })) {
+        if ($seen.ContainsKey($j.ToolId)) { continue }
+        $files = foreach ($f in @($j.Exe, [IO.Path]::ChangeExtension($j.Exe, '.dll'))) {
+            if (Test-Path -LiteralPath $f) {
+                try { [pscustomobject]@{ Path = $f; Sha256 = (Get-EztSha256 -Path $f) } } catch { [pscustomobject]@{ Path = $f; Sha256 = "error: $($_.Exception.Message)" } }
+            }
+        }
+        $seen[$j.ToolId] = [pscustomobject]@{ Tool = $j.ToolId; Version = $Plan.ToolInfo.Versions[$j.ToolId]; Files = @($files) }
+    }
+    @($seen.Values | Sort-Object Tool)
+}
+
+function Save-EztRunRecord($Plan, [datetime]$Start, $Jobs, $State) {
     $dir = Join-Path $Plan.CaseDir 'runs'
     [void](New-Item -ItemType Directory -Path $dir -Force)
+    $ev = $Plan.Evidence
+    $evHash = if ($State -and $State.EvidenceSha256) { $State.EvidenceSha256 } else { $null }
+    $hashNote = if ($evHash) { 'SHA-256 of the evidence ZIP' } elseif ($ev.ZipPath) { 'not hashed (run stopped before hashing finished)' } else { 'not hashed: folder or drive evidence' }
     $rec = [pscustomobject]@{
         EZTriageVersion = $script:EngineVersion
         Started = $Start.ToString('o'); Finished = (Get-Date).ToString('o')
         Computer = $env:COMPUTERNAME; User = $env:USERNAME
-        Evidence = [pscustomobject]@{ Path = $Plan.Evidence.Path; Type = $Plan.Evidence.Type; Description = $Plan.Evidence.Description; ExtractDir = $Plan.Evidence.ExtractDir }
+        Evidence = [pscustomobject]@{ Path = $ev.Path; Type = $ev.Type; Description = $ev.Description; ExtractDir = $ev.ExtractDir; Sha256 = $evHash; Hash = $hashNote }
         ToolsPath = $Plan.ToolInfo.Path
+        ToolBinaries = @(Get-EztToolHashes $Plan $Jobs)
         Options = $Plan.Options
         Jobs = @($Jobs | ForEach-Object {
                 [pscustomobject]@{
