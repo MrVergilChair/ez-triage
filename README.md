@@ -111,7 +111,20 @@ Heavy tools (MFTECmd, EvtxECmd, RECmd) run one at a time, starting with the larg
 
 Other parameters: `-EvtxMode Key|All`, `-EvtxCustomIds 4624,4625`, `-RecmdBatch DFIRBatch.reb`, `-IfAlreadyRan Skip|NewFolder|Overwrite`, `-LightSlots 1-8`. `-PlanOnly` prints the commands without running anything.
 
-An unknown `-Preset` or `-Tools` name stops with the list of valid names. The exit code is `0` when every selected tool ran ("done with warnings" and "no output" count as ran) and `1` when a tool failed, was cancelled or is not installed, or the run stopped, so scripts and scheduled tasks can check `$LASTEXITCODE`.
+### Several collections
+
+Give `-CaseRoot` instead of `-CaseDir`, and point `-Evidence` at a folder of collections or a wildcard. Every ZIP and subfolder is processed in turn, one collection at a time, into `<CaseRoot>\<name>_EZTriage`. Resource use is the same as a single run; only the total time adds up. A collection that fails does not stop the others, and a summary table lists each one at the end.
+
+```powershell
+.\Invoke-EZTriage.ps1 -ToolsPath C:\Tools\net -Evidence D:\Collections\*.zip -CaseRoot D:\Cases
+.\Invoke-EZTriage.ps1 -ToolsPath C:\Tools\net -Evidence D:\KAPE -CaseRoot D:\Cases -Preset 'Execution'
+```
+
+Leave room on the case drive: each ZIP is extracted into its case folder, and `$J` or event log CSVs can be several GB on a busy machine.
+
+### Exit codes
+
+An unknown `-Preset` or `-Tools` name stops with the list of valid names. The exit code is `0` when every selected tool ran ("done with warnings" and "no output" count as ran) and `1` when a tool failed, was cancelled or is not installed, or the run stopped, so scripts and scheduled tasks can check `$LASTEXITCODE`. With `-CaseRoot`, `1` means at least one collection had a problem.
 
 The window also accepts `-ToolsPath`, `-Evidence` and `-CaseDir`, so a shortcut can open straight onto a collection:
 
