@@ -158,3 +158,5 @@ Settings (tools folder, last selection, options) are saved in `%APPDATA%\EZTriag
 - [Eric Zimmerman](https://ericzimmerman.github.io/) for the tools this runs.
 - The SANS FOR508 course for the artifact priorities behind the presets.
 - Mark Hallman's `Automate_EvtxECmd.ps1` for the key event log approach and event ID list.
+
+EZ Triage is an independent project. It is not affiliated with or endorsed by SANS, GIAC or Eric Zimmerman. FOR508 refers to the SANS course whose artifact priorities inspired the presets; SANS, GIAC and FOR508 are trademarks of their owners.
