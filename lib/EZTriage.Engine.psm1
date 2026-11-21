@@ -91,7 +91,7 @@ function ConvertTo-EztIdList([string]$Text) {
 
 function Find-EztTools {
     param([Parameter(Mandatory)][string]$Path)
-    $result = [ordered]@{ Path = $Path; Tools = @{}; Versions = @{}; BatchFiles = @(); Missing = @(); DotNet = $null }
+    $result = [ordered]@{ Path = $Path; Tools = @{}; Versions = @{}; BatchFiles = @(); Missing = @(); DotNet = $null; TimelineExplorer = '' }
     if (-not (Test-Path -LiteralPath $Path -PathType Container)) { return [pscustomobject]$result }
 
     # EZ Tools ship either flat or with a subfolder per tool (EvtxECmd\, RECmd\, SQLECmd\).
@@ -105,6 +105,8 @@ function Find-EztTools {
             try { $result.Versions[$t.Id] = [Diagnostics.FileVersionInfo]::GetVersionInfo($exes[$t.Exe]).FileVersion } catch { $result.Versions[$t.Id] = '' }
         } else { $result.Missing += $t.Id }
     }
+    # Timeline Explorer (Get-ZimmermanTools puts it in TimelineExplorer\) opens the CSV output.
+    if ($exes.ContainsKey('TimelineExplorer.exe')) { $result.TimelineExplorer = $exes['TimelineExplorer.exe'] }
     if ($result.Tools['RECmd']) {
         $bd = Join-Path (Split-Path $result.Tools['RECmd']) 'BatchExamples'
         if (Test-Path -LiteralPath $bd) { $result.BatchFiles = @(Get-ChildItem -LiteralPath $bd -Filter '*.reb' -File | Sort-Object Name | ForEach-Object Name) }

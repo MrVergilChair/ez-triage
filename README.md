@@ -28,7 +28,7 @@ The launcher bypasses the PowerShell execution policy for this one process only.
 2. **Evidence.** Choose a folder or drive, or a ZIP. EZ Triage detects the collection type, the host name (Velociraptor) and the Windows volumes inside it, and shows what each tool found, for example `642 files` for Prefetch or `11 of 16 logs` for event logs.
 3. **Case folder.** Suggested automatically next to the evidence (`<evidence name>_EZTriage`). Change it if you like.
 4. **Tools.** Pick a preset or tick tools yourself. Click a tool's name to see its options and the exact command that will run.
-5. **Start.** Progress and a live log appear at the bottom. Use **Show** to switch between the combined log and any single tool's log.
+5. **Start.** Progress and a live log appear at the bottom. Use **Show** to switch between the combined log and any single tool's log. **Open in Timeline Explorer** opens that tool's CSV output (or, with "All tools", lets you pick from every CSV). It is enabled when `TimelineExplorer.exe` is in the EZ Tools folder, which is where `Get-ZimmermanTools.ps1` puts it.
 
 ### Presets
 

@@ -216,6 +216,8 @@
             <ComboBox x:Name="CmbLogView" Width="280"/>
             <Button x:Name="BtnOpenLog" Content="Open in Notepad" Margin="6,0,0,0"/>
             <Button x:Name="BtnOpenToolDir" Content="Open tool folder" Margin="6,0,0,0"/>
+            <Button x:Name="BtnOpenTE" Content="Open in Timeline Explorer" Margin="6,0,0,0" IsEnabled="False"
+                    ToolTip="Open this tool's CSV output in Timeline Explorer"/>
           </StackPanel>
           <TextBox x:Name="TxtLog" Style="{StaticResource Mono}" TextWrapping="NoWrap"
                    VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"/>

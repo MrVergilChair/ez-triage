@@ -145,6 +145,8 @@ function Set-ToolsFolder([string]$Path) {
     $Path = $Path.Trim().Trim('"')
     $ui.TxtTools.Text = $Path
     $S.ToolInfo = $null
+    $ui.BtnOpenTE.IsEnabled = $false
+    $ui.BtnOpenTE.ToolTip = 'Timeline Explorer was not found in the EZ Tools folder'
     if (-not $Path) { $ui.LblTools.Text = 'Point to the folder with MFTECmd.exe, PECmd.exe and the other tools.'; Update-All; return }
     $ti = Find-EztTools -Path $Path
     if (-not $ti.Tools.Count) {
@@ -153,6 +155,7 @@ function Set-ToolsFolder([string]$Path) {
     } else {
         $S.ToolInfo = $ti
         $S.Settings.ToolsPath = $Path
+        if ($ti.TimelineExplorer) { $ui.BtnOpenTE.IsEnabled = $true; $ui.BtnOpenTE.ToolTip = "Open CSV output in Timeline Explorer ($($ti.TimelineExplorer))" }
         $total = $catalog.Count
         $msg = "$($ti.Tools.Count) of $total tools found"
         if ($ti.Missing.Count) { $msg += " (missing: $($ti.Missing -join ', '))" }
@@ -592,6 +595,42 @@ function Get-SelectedLogPath {
     [string]$item.Tag
 }
 
+function Get-OutputCsvs {
+    # CSVs of the tool picked under "Show", or of every tool when "All tools" is picked.
+    $case = $ui.TxtCase.Text.Trim()
+    $item = $ui.CmbLogView.SelectedItem
+    if (-not $case -or -not (Test-Path -LiteralPath $case)) { return @() }
+    $dirs = if ($item -and $item.Tag -ne '*') { @(Split-Path ([string]$item.Tag)) }
+    else { @($catalog | ForEach-Object { $_.Category } | Select-Object -Unique | ForEach-Object { Join-Path $case $_ } | Where-Object { Test-Path -LiteralPath $_ }) }
+    @(foreach ($d in $dirs) { Get-ChildItem -LiteralPath $d -Filter '*.csv' -File -Recurse -ErrorAction SilentlyContinue }) | Sort-Object FullName
+}
+
+function Open-TimelineExplorer([string]$Csv) {
+    Start-Process -FilePath $S.ToolInfo.TimelineExplorer -ArgumentList "`"$Csv`""
+    $ui.LblStatus.Text = "Opening $(Split-Path $Csv -Leaf) in Timeline Explorer"
+}
+
+function Show-TimelineExplorerMenu {
+    if (-not ($S.ToolInfo -and $S.ToolInfo.TimelineExplorer)) { return }
+    $csvs = @(Get-OutputCsvs)
+    if (-not $csvs.Count) { $ui.LblStatus.Text = 'No CSV output yet for this selection.'; return }
+    if ($csvs.Count -eq 1) { Open-TimelineExplorer $csvs[0].FullName; return }
+    $case = $ui.TxtCase.Text.Trim().TrimEnd('\')
+    $menu = New-Object Windows.Controls.ContextMenu
+    foreach ($f in $csvs) {
+        $rel = if ($f.FullName.StartsWith($case + '\', [StringComparison]::OrdinalIgnoreCase)) { $f.FullName.Substring($case.Length + 1) } else { $f.FullName }
+        $mi = New-Object Windows.Controls.MenuItem
+        # A TextBlock header keeps underscores in file names (a string header treats "_" as an access key).
+        $mi.Header = New-Text ('{0}    {1:n1} MB' -f $rel, ($f.Length / 1MB))
+        $mi.Tag = $f.FullName
+        $mi.Add_Click({ param($src, $evt) Open-TimelineExplorer ([string]$src.Tag) })
+        [void]$menu.Items.Add($mi)
+    }
+    $menu.PlacementTarget = $ui.BtnOpenTE
+    $menu.Placement = 'Bottom'
+    $menu.IsOpen = $true
+}
+
 #endregion
 
 #region Run
@@ -811,6 +850,7 @@ $ui.BtnOpenCase.Add_Click({ $c = $ui.TxtCase.Text.Trim(); if ($c -and (Test-Path
 $ui.CmbLogView.Add_SelectionChanged({ Show-SelectedLog $true })
 $ui.BtnOpenLog.Add_Click({ $p = Get-SelectedLogPath; if ($p) { Start-Process notepad.exe -ArgumentList "`"$p`"" } })
 $ui.BtnOpenToolDir.Add_Click({ $p = Get-SelectedLogPath; if ($p) { Start-Process explorer.exe -ArgumentList "/select,`"$p`"" } })
+$ui.BtnOpenTE.Add_Click({ Show-TimelineExplorerMenu })
 
 # An unexpected error in a button handler is shown in the status bar instead of closing the window.
 $Window.Dispatcher.Add_UnhandledException({
