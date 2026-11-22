@@ -5,9 +5,11 @@
 
 $script:ModuleRoot = Split-Path -Parent $PSScriptRoot
 $script:ModuleFile = $PSCommandPath
-$script:EngineVersion = '0.1.0'
+$script:EngineVersion = '1.0.0'   # the one place the version is set
 
 #region Tool catalog
+
+function Get-EztVersion { $script:EngineVersion }
 
 function Get-EztCatalog {
     # Category = output folder. Heavy tools run one at a time; light tools run alongside.

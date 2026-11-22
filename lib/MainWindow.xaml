@@ -201,7 +201,8 @@
           <Button x:Name="BtnOpenCase" Content="Open case folder"/>
         </StackPanel>
         <StackPanel Margin="14,0" VerticalAlignment="Center">
-          <TextBlock x:Name="LblRun" Text="" Foreground="#2B3138"/>
+          <TextBlock x:Name="LblRun" Text="" Foreground="#2B3138" TextTrimming="CharacterEllipsis"
+                     ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
           <ProgressBar x:Name="PrgRun" Height="6" Margin="0,4,0,0" Minimum="0" Maximum="100" Value="0"/>
         </StackPanel>
       </DockPanel>

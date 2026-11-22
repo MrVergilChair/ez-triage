@@ -16,9 +16,16 @@ A small Windows tool that runs [Eric Zimmerman's forensic tools](https://ericzim
 
 ## Getting started
 
-1. Download this repository: **Code > Download ZIP**, or `git clone https://github.com/MrVergilChair/ez-triage.git`.
-2. If you downloaded the ZIP, right-click it, choose **Properties**, tick **Unblock**, then extract it. This stops Windows warning about every file.
-3. Double-click **`Start-EZTriage.cmd`**.
+1. Download the ZIP of the latest release from the [Releases page](https://github.com/MrVergilChair/ez-triage/releases) (for example `EZTriage-1.0.0.zip`). A release is a fixed, tested version, so every case runs the same code.
+2. Check it against the SHA-256 in the release notes before you use it:
+   ```powershell
+   (Get-FileHash .\EZTriage-1.0.0.zip -Algorithm SHA256).Hash
+   ```
+   Do not use the ZIP if the hash differs.
+3. Right-click the ZIP, choose **Properties**, tick **Unblock**, then extract it. This stops Windows warning about every file.
+4. Double-click **`Start-EZTriage.cmd`**.
+
+The version is shown at the bottom right of the window and recorded in every run record, so a case can always be tied to the release it was processed with. (**Code > Download ZIP** or `git clone` gets the latest development code instead of a release.)
 
 The launcher bypasses the PowerShell execution policy for this one process only. Nothing on the machine is changed.
 
@@ -151,6 +158,8 @@ Settings (tools folder, last selection, options) are saved in `%APPDATA%\EZTriag
 - **Disk images (E01, VHDX, VMDK)** are not read directly. Mount them first and point EZ Triage at the drive letter.
 - **".NET 10 runtime NOT found"** (or another version). Install that .NET Runtime from Microsoft, or use the EZ Tools build that matches the runtime you have.
 - **"...found, but only the ARM64 version"** (Windows on ARM). Install the x64 .NET Runtime of that version as well. It installs next to the ARM64 one, in `C:\Program Files\dotnet\x64`.
+- **A case folder will not delete** ("Could not find a part of the path", "file name too long"). An extracted collection can contain paths longer than Windows' classic 260-character limit (Windows Error Reporting files, for example), which File Explorer and Windows PowerShell's `Remove-Item` cannot always remove. Delete it with the long-path form instead: `cmd /c rd /s /q "\\?\D:\Cases\Host1"` (replace the path; it must be a full path starting with a drive letter).
+- **EvtxECmd is set to "Only the logs I tick below" but nothing is ticked.** Start stops and says so. Tick some logs or choose "FOR508 key logs". (Before 1.0 this setting could be saved empty by changing an option before choosing evidence.)
 - **"Done with warnings".** Open the tool's log (Show > tool name). Typical messages such as empty jump lists or unmapped ShellBag GUIDs do not mean data is missing.
 
 ## Credits

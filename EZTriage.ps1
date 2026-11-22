@@ -106,7 +106,7 @@ $Brush = @{
     Focus = '#E5F1FB'; Preset = '#DCEBFA'
 }
 $catalog = Get-EztCatalog
-$ui.LblVersion.Text = "EZ Triage 0.1.0"
+$ui.LblVersion.Text = "EZ Triage $(Get-EztVersion)"
 
 # Fit the screen it opens on (collection laptops are often 1366x768 or 1080p at 125%).
 $work = [Windows.SystemParameters]::WorkArea
@@ -162,7 +162,7 @@ function Set-ToolsFolder([string]$Path) {
         if ($ti.DotNet.Message) { $msg += ". $($ti.DotNet.Message)" }
         $ui.LblTools.Text = $msg
         $ui.LblTools.Foreground = $(if ($ti.DotNet.Ok) { $Brush.Muted } else { $Brush.Bad })
-        $ui.LblVersion.Text = "EZ Triage 0.1.0  |  $($ti.DotNet.Message)"
+        $ui.LblVersion.Text = "EZ Triage $(Get-EztVersion)  |  $($ti.DotNet.Message)"
     }
     Update-BatchList
     Update-All
@@ -256,7 +256,8 @@ function Set-Evidence([string]$Path, [bool]$ResetCase = $true, [string]$Display 
     $ui.LblEvidence.Foreground = $Brush.Muted
     $ui.LblEvidence.Text = 'Reading evidence...'
     $toolsPath = if ($S.ToolInfo) { $S.ToolInfo.Path } else { '' }
-    $prefix = if ($S.Batch) { "$($S.Batch.Count) collections selected. The tool list and commands below are based on the first one, $(Split-Path $Path -Leaf).`n" } else { '' }
+    # One line in multi-collection mode, so the options panel keeps its height.
+    $prefix = if ($S.Batch) { "$($S.Batch.Count) collections; the tool list and commands use the first one. " } else { '' }
     Start-Background -Script {
         param($EnginePath, $Path, $ExtractTo, $ToolsPath, $Options)
         Import-Module $EnginePath
@@ -280,8 +281,10 @@ function Set-Evidence([string]$Path, [bool]$ResetCase = $true, [string]$Display 
         if ($r.Evidence.Error) { $ui.LblEvidence.Text = $r.Evidence.Error; $ui.LblEvidence.Foreground = $Brush.Bad; Update-All; return }
         $S.Evidence = $r.Evidence; $S.Avail = $r.Avail; $S.EvidenceLogs = @($r.Logs)
         $text = "${prefix}Detected: $($r.Evidence.Description)"
-        if ($r.Evidence.IsZip -and -not $r.Evidence.Extracted) { $text += '. The ZIP is extracted once into the case folder when you start.' }
-        elseif ($r.Evidence.Extracted) { $text += '. Using the copy extracted earlier.' }
+        if (-not $prefix) {   # with several collections the line stays short
+            if ($r.Evidence.IsZip -and -not $r.Evidence.Extracted) { $text += '. The ZIP is extracted once into the case folder when you start.' }
+            elseif ($r.Evidence.Extracted) { $text += '. Using the copy extracted earlier.' }
+        }
         if ($r.Evidence.Warnings.Count) { $text += "`n" + ($r.Evidence.Warnings -join "`n") }
         $ui.LblEvidence.Text = $text
         $ui.LblEvidence.Foreground = $(if ($r.Evidence.Volumes.Count) { $Brush.Muted } else { $Brush.Warn })
@@ -296,7 +299,7 @@ function Update-CaseInfo {
     $S.Previous = @{}
     $case = $ui.TxtCase.Text.Trim()
     if ($S.Batch) {
-        $ui.LblCase.Text = if ($case) { "Each of the $($S.Batch.Count) collections gets its own folder in here (<name>_EZTriage). Tools already processed in a collection's folder are skipped unless 'If already processed' is New folder or Overwrite." } else { 'Choose a folder. Each collection gets its own case folder in it.' }
+        $ui.LblCase.Text = if ($case) { "Each collection gets its own <name>_EZTriage folder in here. Tools already processed there are skipped (Ask counts as Skip)." } else { 'Choose a folder. Each collection gets its own case folder in it.' }
         Update-LogViewList
         return
     }
@@ -312,7 +315,8 @@ function Update-CaseInfo {
             } catch { }
         }
     }
-    $ui.LblCase.Text = if ($S.Previous.Count) { "Existing case: $($S.Previous.Count) tools already processed here. They are marked in the list." } else { 'Existing folder. Output goes into it, one folder per tool.' }
+    $done = if ($S.Previous.Count -eq 1) { '1 tool' } else { "$($S.Previous.Count) tools" }
+    $ui.LblCase.Text = if ($S.Previous.Count) { "Existing case: $done already processed here. They are marked in the list." } else { 'Existing folder. Output goes into it, one folder per tool.' }
     Update-LogViewList
 }
 
@@ -487,7 +491,12 @@ function Read-OptionsFromUi {
     $o.EvtxCustomIds = $ui.TxtCustomIds.Text
     if ($ui.CmbBatch.SelectedItem) { $o.RecmdBatch = [string]$ui.CmbBatch.SelectedItem }
     if ($o.EvtxMode -eq 'Key') { $o.EvtxLogs = @(Get-EztKeyLogs) }
-    elseif ($o.EvtxMode -eq 'Pick') { $o.EvtxLogs = @($S.LogRows.Keys | Where-Object { $S.LogRows[$_].IsChecked }) }
+    elseif ($o.EvtxMode -eq 'Pick') {
+        # Logs ticked earlier that have no row right now (not in this evidence) stay ticked.
+        $ticked = @($S.LogRows.Keys | Where-Object { $S.LogRows[$_].IsChecked })
+        $kept = @(@($o.EvtxLogs) | Where-Object { $_ -and -not $S.LogRows.ContainsKey($_) })
+        $o.EvtxLogs = @($ticked + $kept | Select-Object -Unique)
+    }
     Update-LogChecks
     Update-All
 }
@@ -497,7 +506,8 @@ function Build-LogList {
     $S.LogRows = @{}
     $key = @(Get-EztKeyLogs)
     $present = @{}; foreach ($l in $S.EvidenceLogs) { $present[$l] = $true }
-    $names = @($key) + @($S.EvidenceLogs | Where-Object { $key -notcontains $_ } | Sort-Object)
+    # Key logs first, then the logs in the evidence and any others ticked earlier.
+    $names = @($key) + @(@($S.EvidenceLogs) + @($S.Options.EvtxLogs) | Where-Object { $_ -and $key -notcontains $_ } | Sort-Object -Unique)
     foreach ($n in $names) {
         $c = New-Object Windows.Controls.CheckBox
         $c.Tag = $n; $c.Margin = '0,1'
@@ -724,6 +734,12 @@ function Start-Run {
     if (-not $case) { Show-Message 'Choose a case folder.' 'Warning' | Out-Null; return }
     $ids = @($catalog | Where-Object { $S.Selected.Contains($_.Id) -and $S.ToolInfo.Tools[$_.Id] } | ForEach-Object Id)
     if (-not $ids.Count) { Show-Message 'Tick at least one tool.' 'Warning' | Out-Null; return }
+    Read-OptionsFromUi
+    if ($ids -contains 'EvtxECmd' -and $S.Options.EvtxMode -eq 'Pick' -and -not @($S.Options.EvtxLogs).Count) {
+        Show-Message "EvtxECmd is set to 'Only the logs I tick below', but no logs are ticked.`n`nTick some logs, or choose 'FOR508 key logs'." 'Warning' | Out-Null
+        Set-Focus 'EvtxECmd'
+        return
+    }
     if (-not $S.ToolInfo.DotNet.Ok) {
         if ((Show-Message "$($S.ToolInfo.DotNet.Message)`n`nStart anyway?" 'Warning' 'YesNo') -ne 'Yes') { return }
     }
@@ -898,10 +914,11 @@ function Update-Run {
     $elapsed = Format-EztDuration ((Get-Date) - $run.Started)
     if ($b) {
         $cur = $b.Items[[Math]::Max(0, $b.Index - 1)]
-        $tag = "[$([Math]::Max(1, $b.Index))/$($b.Items.Count)] $($cur.Name)   "
+        $tag = "[$([Math]::Max(1, $b.Index))/$($b.Items.Count)] "
+        $name = "     $($cur.Name)"
         if ($b.Done) { Complete-BatchRun $run; return }
-        if (-not $st -or $st.Done) { $ui.LblRun.Text = "${tag}Opening collection...  ($elapsed)"; $ui.PrgRun.IsIndeterminate = $true; Update-ToolRows; return }
-    } else { $tag = '' }
+        if (-not $st -or $st.Done) { $ui.LblRun.Text = "${tag}Opening collection...  ($elapsed)$name"; $ui.PrgRun.IsIndeterminate = $true; Update-ToolRows; return }
+    } else { $tag = ''; $name = '' }
     switch ($st.Phase) {
         'Hashing' { $ui.LblRun.Text = "${tag}Hashing evidence ZIP (SHA-256)... $($st.HashPercent)%  ($elapsed)"; $ui.PrgRun.IsIndeterminate = $false; $ui.PrgRun.Value = $st.HashPercent }
         'Extracting' { $ui.LblRun.Text = "${tag}Extracting ZIP... $($st.ExtractPercent)%  ($elapsed)"; $ui.PrgRun.IsIndeterminate = $false; $ui.PrgRun.Value = $st.ExtractPercent }
@@ -913,6 +930,8 @@ function Update-Run {
             $ui.LblRun.Text = "${tag}$($st.Completed) of $($st.Total) done  ($elapsed)" + $(if ($now.Count) { '   Running: ' + ($now -join ', ') } else { '' })
         }
     }
+    # Name last, so a long collection name is what gets trimmed. Only after the switch set the text (no repeats).
+    if ($name -and $st.Phase -in 'Hashing', 'Extracting', 'Preparing', 'Running') { $ui.LblRun.Text += $name }
     if ($ui.CmbLogView.SelectedItem -and $ui.CmbLogView.SelectedItem.Tag -ne '*') { Show-SelectedLog $false }
     Update-ToolRows
     if ($st.Done -and $run.Handle.IsCompleted) {
@@ -941,7 +960,8 @@ function Update-All {
     Update-Preview
     $n = @($catalog | Where-Object { $S.Selected.Contains($_.Id) -and $S.ToolInfo -and $S.ToolInfo.Tools[$_.Id] }).Count
     $running = [bool]$S.Run
-    $ui.BtnStart.Content = if ($n -and $S.Batch) { "Start ($n tools x $($S.Batch.Count) collections)" } elseif ($n) { "Start ($n tools)" } else { 'Start' }
+    $tools = if ($n -eq 1) { '1 tool' } else { "$n tools" }
+    $ui.BtnStart.Content = if ($n -and $S.Batch) { "Start ($tools x $($S.Batch.Count) collections)" } elseif ($n) { "Start ($tools)" } else { 'Start' }
     $ui.BtnStart.IsEnabled = (-not $running) -and $n -gt 0 -and $S.Evidence -and $S.ToolInfo
     if (-not $running -and -not $ui.LblRun.Text) { $ui.LblRun.Text = 'Ready' }
 }
@@ -1057,6 +1077,7 @@ function Select-Folder([string]$Description, [string]$Start) {
 Build-Presets
 Build-ToolList
 Write-OptionsToUi
+Build-LogList   # before any evidence is read, so ticking options never sees an empty log list
 foreach ($i in 1..6) { [void]$ui.CmbSlots.Items.Add($i) }
 $ui.CmbSlots.SelectedItem = [int]$S.Settings.LightSlots
 if ($null -eq $ui.CmbSlots.SelectedItem) { $ui.CmbSlots.SelectedItem = 3 }
