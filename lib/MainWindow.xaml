@@ -179,7 +179,7 @@
                   <Button x:Name="BtnBatch" Content="Other .reb file..." Margin="6,0,0,0"/>
                 </StackPanel>
                 <TextBlock x:Name="LblBatchHint" Style="{StaticResource Hint}" Margin="0,6,0,0"
-                           Text="Kroll_Batch.reb is the usual choice. DFIRBatch.reb covers more keys and takes longer. Both ship with RECmd in BatchExamples."/>
+                           Text="DFIRBatch.reb is the default: the widest coverage (WDigest, UAC, Defender, SmartScreen and more). Kroll_Batch.reb is a smaller subset. The result is named after the batch file, for example RECmd_DFIRBatch.csv."/>
               </StackPanel>
 
               <TextBlock x:Name="LblNoOptions" Style="{StaticResource Hint}" Visibility="Collapsed"

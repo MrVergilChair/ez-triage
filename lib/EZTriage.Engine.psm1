@@ -66,7 +66,7 @@ function Get-EztDefaultOptions {
         EvtxLogs       = @(Get-EztKeyLogs)
         EvtxIdMode     = 'FOR508'        # FOR508 | All | Custom
         EvtxCustomIds  = ''
-        RecmdBatch     = 'Kroll_Batch.reb'
+        RecmdBatch     = 'DFIRBatch.reb'   # same author and categories as Kroll_Batch, ~60% more keys
     }
 }
 
@@ -858,7 +858,7 @@ function Get-EztToolInputs {
                 })
             $batchDir = if ($ToolInfo -and $ToolInfo.Tools['RECmd']) { Join-Path (Split-Path $ToolInfo.Tools['RECmd']) 'BatchExamples' } else { 'BatchExamples' }
             $batch = if ([IO.Path]::IsPathRooted($Options.RecmdBatch)) { $Options.RecmdBatch } else { Join-Path $batchDir $Options.RecmdBatch }
-            $bname = [IO.Path]::GetFileNameWithoutExtension($batch)
+            $bname = 'RECmd_' + [IO.Path]::GetFileNameWithoutExtension($batch)   # RECmd_DFIRBatch.csv: says which batch file made it
             if ($HiveStage -and $roots.Count) {
                 [void]$jobs.Add((New-EztJob $Tool "RECmd:$($Volume.Key)" 'RECmd' @('-d', $HiveStage, '--bn', $batch, '--csv', '{OUT}', '--csvf', "$p$bname.csv") -LogName "RECmd$p.log" -Inputs $HiveStage))
             } else {
@@ -1397,6 +1397,7 @@ function Complete-EztRun($State, $Run, [bool]$Cancelled) {
         $parent = Split-Path $j.StageDir
         if ((Split-Path $parent -Leaf) -eq '_staging' -and -not (Get-ChildItem -LiteralPath $parent -Force -ErrorAction SilentlyContinue)) { Remove-Item -LiteralPath $parent -Force -ErrorAction SilentlyContinue }
     }
+    if ($j.ToolId -eq 'RECmd' -and $j.Status -in 'Done', 'Warnings') { Rename-EztRecmdSplitDir $j $State }
     $lvl = switch ($j.Status) { 'Done' { 'INFO' } 'Warnings' { 'WARN' } 'NoOutput' { 'WARN' } default { 'ERROR' } }
     $msg = "$($j.Label): $(Get-EztStatusText $j.Status) in $dur ($($j.Detail))"
     if ($j.Status -eq 'Warnings' -and $Run.ErrorSample.Count) { $msg += ". First: $($Run.ErrorSample[0])" }
@@ -1435,6 +1436,22 @@ function Get-EztToolHashes($Plan, $Jobs) {
         $seen[$j.ToolId] = [pscustomobject]@{ Tool = $j.ToolId; Version = $Plan.ToolInfo.Versions[$j.ToolId]; Files = @($files) }
     }
     @($seen.Values | Sort-Object Tool)
+}
+
+function Rename-EztRecmdSplitDir($Job, $State) {
+    # Besides the combined CSV, RECmd writes the same rows split per category into a subfolder
+    # named only by a timestamp (20261122182622). Rename it to say what it holds.
+    $i = [array]::IndexOf(@($Job.ArgList), '--csvf')
+    $base = if ($i -ge 0) { [IO.Path]::GetFileNameWithoutExtension([string]$Job.ArgList[$i + 1]) } else { '' }
+    $volume = if ($base -match '^(.+?)_RECmd_') { "$($Matches[1]) - " } else { '' }   # several volumes: "C - Split by category"
+    $dirs = @(Get-ChildItem -LiteralPath $Job.OutDir -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -match '^\d{14}$' -and $_.CreationTime -ge $Job.Started.AddSeconds(-2) })
+    foreach ($d in $dirs) {
+        $name = "${volume}Split by category"; $n = 2
+        while (Test-Path -LiteralPath (Join-Path $Job.OutDir $name)) { $name = "${volume}Split by category ($n)"; $n++ }
+        try { Rename-Item -LiteralPath $d.FullName -NewName $name -ErrorAction Stop }
+        catch { Write-EztLog $State "RECmd: could not rename $($d.Name) to '$name': $($_.Exception.Message)" 'WARN' }
+    }
 }
 
 function Save-EztRunRecord($Plan, [datetime]$Start, $Jobs, $State) {

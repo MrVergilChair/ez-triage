@@ -172,7 +172,7 @@ function Update-BatchList {
     $S.Suspend = $true
     $ui.CmbBatch.Items.Clear()
     $files = @(); if ($S.ToolInfo) { $files = @($S.ToolInfo.BatchFiles) }
-    if (-not $files.Count) { $files = @('Kroll_Batch.reb') }
+    if (-not $files.Count) { $files = @('DFIRBatch.reb') }
     foreach ($f in $files) { [void]$ui.CmbBatch.Items.Add($f) }
     $want = $S.Options.RecmdBatch
     if ($want -and -not $ui.CmbBatch.Items.Contains($want)) { [void]$ui.CmbBatch.Items.Add($want) }
@@ -659,7 +659,25 @@ function Get-OutputCsvs {
     $cases = if ($S.Batch) { @(Get-ChildItem -LiteralPath $case -Directory -Filter '*_EZTriage' -ErrorAction SilentlyContinue | ForEach-Object FullName) } else { @($case) }
     $dirs = if ($item -and $item.Tag -ne '*') { @(Split-Path ([string]$item.Tag)) }
     else { @(foreach ($c in $cases) { $catalog | ForEach-Object { $_.Category } | Select-Object -Unique | ForEach-Object { Join-Path $c $_ } | Where-Object { Test-Path -LiteralPath $_ } }) }
-    @(foreach ($d in $dirs) { Get-ChildItem -LiteralPath $d -Filter '*.csv' -File -Recurse -ErrorAction SilentlyContinue }) | Sort-Object FullName
+    @(foreach ($d in $dirs) { Get-ChildItem -LiteralPath $d -Filter '*.csv' -File -Recurse -ErrorAction SilentlyContinue }) |
+        Where-Object { -not (Test-RecmdSplitCsv $_) -and (Test-CsvHasRows $_.FullName) } |
+        Sort-Object FullName
+}
+
+function Test-RecmdSplitCsv($File) {
+    # RECmd writes the combined result (RECmd_DFIRBatch.csv) plus the same rows split per category
+    # in a subfolder: "Split by category" (renamed after the run) or a bare timestamp (older cases).
+    # Only the combined file is offered.
+    $dir = Split-Path $File.FullName
+    (Split-Path $dir -Leaf) -match '^\d{14}$|Split by category( \(\d+\))?$' -and (Split-Path (Split-Path $dir) -Leaf) -like 'RECmd*'
+}
+
+function Test-CsvHasRows([string]$Path) {
+    # Several tools write header-only CSVs when they find nothing; those are left out of the menu.
+    try {
+        $r = New-Object IO.StreamReader -ArgumentList $Path
+        try { [void]$r.ReadLine(); $line = $r.ReadLine(); return [bool]($line -and $line.Trim()) } finally { $r.Dispose() }
+    } catch { return $true }
 }
 
 function Open-TimelineExplorer([string]$Csv) {

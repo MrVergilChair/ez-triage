@@ -63,7 +63,7 @@ RecentFileCacheParser (Windows 7) and SumECmd (Windows Server) are available but
 
 - **MFTECmd:** choose any of `$MFT`, `$J`, `$LogFile`, `$Boot` and `$SDS` separately (only `$MFT` by default), plus all timestamps (`--at`) and slack recovery (`--rs`). `$J` is parsed with the `$MFT` so paths are complete.
 - **EvtxECmd:** parse the FOR508 key logs (default), only the logs you tick, or every log. Filter by the 108 FOR508 event IDs (default), all events, or your own list. Selected logs are copied to a staging folder first, the same approach as Mark Hallman's `Automate_EvtxECmd.ps1`, so the tool does not run for an hour.
-- **RECmd:** choose any batch file from RECmd's `BatchExamples` folder (`Kroll_Batch.reb` by default, `DFIRBatch.reb` for more coverage) or your own `.reb`.
+- **RECmd:** choose any batch file from RECmd's `BatchExamples` folder (`DFIRBatch.reb` by default, `Kroll_Batch.reb` for a smaller subset of the same categories) or your own `.reb`. The result is named after the batch file, for example `RECmd_DFIRBatch.csv`.
 - Every other tool finds its input automatically. User-based tools always process **all** user profiles.
 
 The key log list and the event ID list are plain text files in `config\`. Edit them to suit your cases:
@@ -83,7 +83,7 @@ The key log list and the event ID list are plain text files in `config\`. Edit t
   Execution\AmcacheParser\
   Execution\AppCompatCacheParser\
   EventLogs\EvtxECmd\
-  Registry\RECmd\
+  Registry\RECmd\              RECmd_DFIRBatch.csv (all results), Split by category\ (the same rows, one CSV per category)
   Registry\SBECmd\
   UserActivity\LECmd\ JLECmd\ SrumECmd\ WxTCmd\ SQLECmd\
   Evidence\                    extracted ZIP (only when the evidence was a ZIP)
@@ -126,7 +126,7 @@ Heavy tools (MFTECmd, EvtxECmd, RECmd) run one at a time, starting with the larg
 .\Invoke-EZTriage.ps1 -ToolsPath C:\Tools\net -Evidence F:\ -CaseDir D:\Cases\Host1 -Tools MFTECmd -MftFiles MFT,J -PlanOnly
 ```
 
-Other parameters: `-EvtxMode Key|All`, `-EvtxCustomIds 4624,4625`, `-RecmdBatch DFIRBatch.reb`, `-IfAlreadyRan Skip|NewFolder|Overwrite`, `-LightSlots 1-8`. `-PlanOnly` prints the commands without running anything.
+Other parameters: `-EvtxMode Key|All`, `-EvtxCustomIds 4624,4625`, `-RecmdBatch Kroll_Batch.reb`, `-IfAlreadyRan Skip|NewFolder|Overwrite`, `-LightSlots 1-8`. `-PlanOnly` prints the commands without running anything.
 
 ### Several collections
 

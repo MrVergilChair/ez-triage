@@ -30,7 +30,7 @@ param(
     [ValidateSet('Key', 'All')][string]$EvtxMode = 'Key',
     [ValidateSet('FOR508', 'All', 'Custom')][string]$EvtxIdMode = 'FOR508',
     [string]$EvtxCustomIds = '',
-    [string]$RecmdBatch = 'Kroll_Batch.reb',
+    [string]$RecmdBatch = 'DFIRBatch.reb',
     [ValidateSet('Skip', 'NewFolder', 'Overwrite')][string]$IfAlreadyRan = 'Skip',
     [ValidateRange(1, 8)][int]$LightSlots = 3,
     [switch]$PlanOnly
