@@ -5,7 +5,7 @@
 
 $script:ModuleRoot = Split-Path -Parent $PSScriptRoot
 $script:ModuleFile = $PSCommandPath
-$script:EngineVersion = '1.0.0'   # the one place the version is set
+$script:EngineVersion = '1.0.1'   # the one place the version is set
 
 #region Tool catalog
 

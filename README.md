@@ -16,10 +16,10 @@ A small Windows tool that runs [Eric Zimmerman's forensic tools](https://ericzim
 
 ## Getting started
 
-1. Download the ZIP of the latest release from the [Releases page](https://github.com/MrVergilChair/ez-triage/releases) (for example `EZTriage-1.0.0.zip`). A release is a fixed, tested version, so every case runs the same code.
+1. Download the ZIP of the latest release from the [Releases page](https://github.com/MrVergilChair/ez-triage/releases) (for example `EZTriage-1.0.1.zip`). A release is a fixed, tested version, so every case runs the same code.
 2. Check it against the SHA-256 in the release notes before you use it:
    ```powershell
-   (Get-FileHash .\EZTriage-1.0.0.zip -Algorithm SHA256).Hash
+   (Get-FileHash .\EZTriage-1.0.1.zip -Algorithm SHA256).Hash
    ```
    Do not use the ZIP if the hash differs.
 3. Right-click the ZIP, choose **Properties**, tick **Unblock**, then extract it. This stops Windows warning about every file.
