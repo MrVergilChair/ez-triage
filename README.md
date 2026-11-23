@@ -1,9 +1,19 @@
 # EZ Triage
 
+> **Make sure your EZ Tools are up to date before each case.** Eric Zimmerman releases updates often, and EZ Triage never updates them for you. Update while preparing the machine, not in the middle of a case: a newer version can change the output, and every tool in a case should be the same version.
+>
+> Open PowerShell in your EZ Tools folder (the one that contains `Get-ZimmermanTools.ps1`) and paste:
+>
+> ```powershell
+> powershell -ExecutionPolicy Bypass -File .\Get-ZimmermanTools.ps1 -Dest "$PWD" -Sync
+> ```
+>
+> This runs Eric Zimmerman's own updater, `Get-ZimmermanTools.ps1`, which is digitally signed by ZimTech LLC (check with `Get-AuthenticodeSignature .\Get-ZimmermanTools.ps1`). It downloads the tools from his official download site (ericzimmermanstools.com, linked from [ericzimmerman.github.io](https://ericzimmerman.github.io/)), and `-Sync` refreshes the EvtxECmd and SQLECmd maps and the RECmd batch files from his GitHub projects ([evtx](https://github.com/EricZimmerman/evtx), [RECmd](https://github.com/EricZimmerman/RECmd), [SQLECmd](https://github.com/EricZimmerman/SQLECmd)). The updater and the tools are his work; EZ Triage only shows the command. It downloads only what changed. If it says it updated itself, paste it again. If Windows says access is denied, open PowerShell as administrator. Don't have the tools yet? Get `Get-ZimmermanTools.zip` from [Eric Zimmerman's site](https://ericzimmerman.github.io/).
+
 A small Windows tool that runs [Eric Zimmerman's forensic tools](https://ericzimmerman.github.io/) against collected evidence. Point it at your EZ Tools folder and a collection, pick a preset or individual tools, and click **Start**. It works out the commands, runs the tools in parallel and keeps the output in a tidy case folder with one log per tool.
 
 - **No install, no EXE.** Plain PowerShell with the built-in Windows interface, so it runs on locked-down forensic workstations where unsigned executables get blocked.
-- **Offline.** It never touches the internet.
+- **Offline.** It never touches the internet, and it never updates the EZ Tools itself (see the note at the top).
 - **Reads the common collection formats:** KAPE output (folder or mounted VHDX), Velociraptor offline collections (folder or ZIP), mounted images (for example Arsenal Image Mounter) and plain folders.
 - **Fast.** A full FOR508-style triage of a typical workstation collection takes about a minute.
 
