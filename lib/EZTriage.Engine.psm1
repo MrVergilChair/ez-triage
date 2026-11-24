@@ -5,7 +5,7 @@
 
 $script:ModuleRoot = Split-Path -Parent $PSScriptRoot
 $script:ModuleFile = $PSCommandPath
-$script:EngineVersion = '1.0.1'   # the one place the version is set
+$script:EngineVersion = '1.1.0'   # the one place the version is set
 
 #region Tool catalog
 
@@ -1494,6 +1494,286 @@ function Get-EztCommandPreview {
         if ($j.Stage) { "# copies $($j.Stage.Count) selected logs to a staging folder first`r`n$cmd" } else { $cmd }
     }
     ($lines -join "`r`n`r`n")
+}
+
+#endregion
+
+#region IOC search
+
+function Initialize-EztScanner {
+    # The matching loop is compiled C# (lib\IocScanner.cs): in PowerShell it would take tens of
+    # minutes on a large MFT CSV. Types live for the whole process, so this compiles once.
+    if ('EZTriage.IocScanner' -as [type]) { return }
+    $src = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'IocScanner.cs') -Raw
+    try { Add-Type -TypeDefinition $src -Language CSharp -ErrorAction Stop }
+    catch { throw "The search needs to compile a small C# helper (lib\IocScanner.cs) and this machine blocked it: $($_.Exception.Message)" }
+}
+
+function ConvertFrom-EztIocText([string]$Text) {
+    # One IOC per line. Blank lines and lines starting with # are ignored, duplicates dropped, and
+    # defanged notation from threat reports is undone (10[.]1[.]1[.]1, hxxp://, evil[.]com).
+    $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    foreach ($raw in ($Text -split '\r?\n')) {
+        $t = $raw.Trim().Trim('"').Trim()
+        if (-not $t -or $t.StartsWith('#')) { continue }
+        $t = $t -replace '\[\.\]|\(\.\)|\{\.\}|\[dot\]|\(dot\)', '.' -replace '\[:\]', ':' -replace '\[@\]|\[at\]', '@' -replace '^hxxp', 'http'
+        if (-not $seen.Add($t)) { continue }
+        $type = if ($t -match '^(\d{1,3}\.){3}\d{1,3}$') { 'IP' } elseif ($t -match '^([0-9a-f]{32}|[0-9a-f]{40}|[0-9a-f]{64})$') { 'Hash' } else { 'Text' }
+        [pscustomobject]@{ Ioc = $t; Type = $type; Short = ($t.Length -lt 4) }
+    }
+}
+
+function Test-EztCaseDir([string]$Dir) {
+    (Test-Path -LiteralPath (Join-Path $Dir 'EZTriage.log')) -or (Test-Path -LiteralPath (Join-Path $Dir 'runs'))
+}
+
+function Get-EztSearchCases([string]$Path) {
+    # A case folder, or a folder that holds several case folders (several collections).
+    $Path = $Path.Trim().Trim('"').TrimEnd('\')
+    if (-not $Path -or -not (Test-Path -LiteralPath $Path -PathType Container)) { return }
+    if (Test-EztCaseDir $Path) { return $Path }
+    Get-ChildItem -LiteralPath $Path -Directory -ErrorAction SilentlyContinue | Where-Object { Test-EztCaseDir $_.FullName } | Sort-Object Name | ForEach-Object FullName
+}
+
+function Get-EztSearchFiles([string]$Case, [string]$HostName) {
+    # Every tool CSV in a case. Left out: RECmd's "Split by category" folder (the same rows as the
+    # combined CSV, so every registry hit would count twice), staging copies, the extracted evidence
+    # and earlier search results (only the tool output folders are read).
+    $Case = $Case.TrimEnd('\')
+    foreach ($cat in @(Get-EztCatalog | ForEach-Object Category | Select-Object -Unique)) {
+        $dir = Join-Path $Case $cat
+        if (-not (Test-Path -LiteralPath $dir)) { continue }
+        foreach ($f in Get-ChildItem -LiteralPath $dir -Filter '*.csv' -File -Recurse -ErrorAction SilentlyContinue) {
+            if ($f.Extension -ne '.csv') { continue }
+            $rel = $f.FullName.Substring($Case.Length + 1)
+            if ($rel -match '\\_staging\\' -or $rel -match '\\RECmd[^\\]*\\([^\\]* - )?(Split by category( \(\d+\))?|\d{14})\\') { continue }
+            [pscustomobject]@{ Path = $f.FullName; Rel = $rel; Length = $f.Length; Case = $Case; Host = $HostName }
+        }
+    }
+}
+
+function Format-EztBytes([double]$Bytes) {
+    if ($Bytes -ge 1GB) { return '{0:n1} GB' -f ($Bytes / 1GB) }
+    if ($Bytes -ge 1MB) { return '{0:n1} MB' -f ($Bytes / 1MB) }
+    '{0:n0} KB' -f [Math]::Ceiling($Bytes / 1KB)
+}
+
+function Invoke-EztSearch {
+    # Searches every tool CSV in one case folder, or in each case folder under a folder of cases.
+    # Only reads the output. Results go to <Path>\Search\<date>_<time>\:
+    #   Hits.csv       one row per matching row (at most $Cap per IOC per file)
+    #   Summary.csv    one row per IOC per host, with the true hit count
+    #   SearchLog.txt  what was searched, what was not, the IOCs, and the SHA-256 of Hits.csv
+    #   IOCs.txt       the IOC list as searched
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][object[]]$Iocs,
+        $State = (New-EztState),
+        [ValidateRange(1, 10000000)][int]$Cap = 10000
+    )
+    $start = Get-Date
+    $State.Running = $true; $State.Done = $false; $State.Phase = 'Searching'; $State.Error = $null; $State.Result = $null
+    $State.BytesDone = [long]0; $State.BytesTotal = [long]0; $State.CurrentFile = ''; $State.FileIndex = 0; $State.FileCount = 0; $State.Scanner = $null
+    try {
+        $Path = $Path.Trim().Trim('"').TrimEnd('\')
+        if (-not $Iocs.Count) { throw 'No IOCs to search for.' }
+        $cases = @(Get-EztSearchCases $Path)
+        if (-not $cases.Count) { throw "No EZ Triage case folder found at $Path. Choose a case folder, or a folder that holds several case folders." }
+        Initialize-EztScanner
+        $hostOf = @{}
+        foreach ($c in $cases) { $hostOf[$c] = (Split-Path $c -Leaf) -replace '_EZTriage$', '' }
+        $files = @(foreach ($c in $cases) { Get-EztSearchFiles $c $hostOf[$c] })
+        # Byte-identical copies in one case are searched once, or every hit in them would count twice
+        # (MFTECmd 2026.11 writes the $MFT CSV again when it parses $J with -m). Only files of equal
+        # size are hashed. The shortest name is kept (MFT.csv over 2026..._MFTECmd_$MFT_Output.csv).
+        $dupes = New-Object Collections.ArrayList
+        $keep = New-Object Collections.ArrayList
+        foreach ($g in @($files | Group-Object { "$($_.Case)|$($_.Length)" })) {
+            if ($g.Count -eq 1 -or $g.Group[0].Length -eq 0) { $keep.AddRange(@($g.Group)); continue }
+            foreach ($h in @($g.Group | Group-Object { $p = $_.Path; try { Get-EztSha256 -Path $p } catch { $p } })) {
+                $sorted = @($h.Group | Sort-Object { $_.Rel.Length }, Rel)
+                [void]$keep.Add($sorted[0])
+                foreach ($d in @($sorted | Select-Object -Skip 1)) { [void]$dupes.Add([pscustomobject]@{ Host = $d.Host; File = $d.Rel; SameAs = $sorted[0].Rel }) }
+            }
+        }
+        $files = @($keep | Sort-Object Case, Rel)
+        foreach ($d in $dupes) { Write-EztLog $State "Skipping $($d.Host)\$($d.File): identical to $($d.SameAs)" }
+        $State.FileCount = $files.Count
+        $State.BytesTotal = [long]($files | Measure-Object Length -Sum).Sum
+
+        $outDir = Join-Path $Path ('Search\' + $start.ToString('yyyyMMdd_HHmmss'))
+        [void](New-Item -ItemType Directory -Path $outDir -Force)
+        $hitsPath = Join-Path $outDir 'Hits.csv'
+        $summaryPath = Join-Path $outDir 'Summary.csv'
+        $logPath = Join-Path $outDir 'SearchLog.txt'
+        @($Iocs | ForEach-Object Ioc) | Set-Content -LiteralPath (Join-Path $outDir 'IOCs.txt') -Encoding UTF8
+
+        Write-EztLog $State "Searching $($files.Count) CSV files ($(Format-EztBytes $State.BytesTotal)) in $($cases.Count) case folder$(if ($cases.Count -ne 1) { 's' }) for $($Iocs.Count) IOC$(if ($Iocs.Count -ne 1) { 's' })"
+        foreach ($i in @($Iocs | Where-Object Short)) { Write-EztLog $State "'$($i.Ioc)' is very short and may match a lot of rows" 'WARN' }
+
+        $names = [string[]]@($Iocs | ForEach-Object Ioc)
+        $ips = [bool[]]@($Iocs | ForEach-Object { $_.Type -eq 'IP' })
+        $scanner = New-Object EZTriage.IocScanner -ArgumentList $names, $ips
+        $scanner.Cap = $Cap
+        $State.Scanner = $scanner
+        if ($State.Cancel) { $scanner.Cancel = $true }
+
+        $agg = @{}
+        $searched = New-Object Collections.ArrayList
+        $skipped = New-Object Collections.ArrayList
+        $broken = 0; $cancelled = $false
+        $writer = New-Object IO.StreamWriter -ArgumentList $hitsPath, $false, (New-Object Text.UTF8Encoding $true)
+        try {
+            $writer.WriteLine([EZTriage.IocScanner]::HitsHeader)
+            $n = 0
+            foreach ($f in $files) {
+                $n++
+                if ($State.Cancel) { $cancelled = $true; break }
+                $State.FileIndex = $n; $State.CurrentFile = "$($f.Host)\$($f.Rel)"
+                try { $r = $scanner.ScanFile($f.Path, $f.Host, $f.Rel, $writer) }
+                catch {
+                    $e = $_.Exception; while ($e.InnerException) { $e = $e.InnerException }
+                    [void]$skipped.Add([pscustomobject]@{ Host = $f.Host; File = $f.Rel; Reason = $e.Message })
+                    Write-EztLog $State "Could not read $($f.Host)\$($f.Rel): $($e.Message)" 'WARN'
+                    $State.BytesDone += $f.Length
+                    continue
+                }
+                $State.BytesDone += $f.Length
+                [void]$searched.Add([pscustomobject]@{ Host = $f.Host; File = $f.Rel; Size = $f.Length; Rows = $r.Records; Complete = -not $r.Cancelled })
+                $broken += $r.BrokenRecords
+                for ($k = 0; $k -lt $names.Count; $k++) {
+                    $cnt = $r.Counts[$k]
+                    if (-not $cnt) { continue }
+                    $key = "$k|$($f.Host)"
+                    if (-not $agg.ContainsKey($key)) { $agg[$key] = @{ Hits = [long]0; Saved = [long]0; Where = New-Object Collections.ArrayList } }
+                    $a = $agg[$key]
+                    $a.Hits += $cnt; $a.Saved += [Math]::Min($cnt, [long]$Cap)
+                    [void]$a.Where.Add($(if ($cnt -gt $Cap) { "$($f.Rel) ($cnt, first $Cap saved)" } else { "$($f.Rel) ($cnt)" }))
+                }
+                if ($r.Cancelled) { $cancelled = $true; break }
+            }
+        } finally { $writer.Dispose() }
+
+        $rows = @(for ($k = 0; $k -lt $names.Count; $k++) {
+                foreach ($c in $cases) {
+                    $a = $agg["$k|$($hostOf[$c])"]
+                    [pscustomobject]@{
+                        Ioc = $names[$k]; Type = $Iocs[$k].Type; Host = $hostOf[$c]
+                        Hits = $(if ($a) { $a.Hits } else { 0 }); SavedInHitsCsv = $(if ($a) { $a.Saved } else { 0 })
+                        FoundIn = $(if ($a) { $a.Where -join '; ' } else { '' })
+                    }
+                }
+            })
+        $rows | Export-Csv -LiteralPath $summaryPath -NoTypeInformation -Encoding UTF8
+        $hitsHash = Get-EztSha256 -Path $hitsPath
+        $finished = Get-Date
+        $result = [pscustomobject]@{
+            Path = $Path; OutDir = $outDir; HitsPath = $hitsPath; SummaryPath = $summaryPath; LogPath = $logPath; HitsSha256 = $hitsHash
+            Cases = $cases; Iocs = $Iocs; Summary = $rows; Searched = @($searched); Skipped = @($skipped); Duplicates = @($dupes); BrokenRecords = $broken
+            Files = $files.Count; Bytes = $State.BytesTotal; Cancelled = $cancelled; Cap = $Cap; Elapsed = ($finished - $start)
+        }
+
+        $status = if ($cancelled) { 'CANCELLED: the results are partial (files below marked "stopped early" or missing were not fully searched)' }
+        elseif ($skipped.Count) { "Finished, but $($skipped.Count) file(s) could not be read (listed below): they were not searched" }
+        else { 'Finished: every file listed below was searched in full' }
+        $log = New-Object Collections.Generic.List[string]
+        $log.Add("EZ Triage $script:EngineVersion IOC search")
+        $log.Add("Started:   $($start.ToString('yyyy-MM-dd HH:mm:ss zzz'))")
+        $log.Add("Finished:  $($finished.ToString('yyyy-MM-dd HH:mm:ss zzz'))  ($(Format-EztDuration $result.Elapsed))")
+        $log.Add("Searched:  $Path")
+        $log.Add("Computer:  $env:COMPUTERNAME   User: $env:USERNAME")
+        $log.Add("Status:    $status")
+        $log.Add("Hits.csv SHA-256: $hitsHash")
+        $log.Add('')
+        $log.Add('How matching works')
+        $log.Add('- Case-insensitive "contains" on every row of every tool CSV. IPs match exactly: 10.1.1.1 does not match 10.1.1.10.')
+        $log.Add("- Hits.csv keeps at most $Cap rows per IOC per file. Summary.csv has the true counts.")
+        $log.Add('- Only EZ Tools output was searched, not the evidence itself. A tool or event log that was not processed was not searched.')
+        $log.Add('- Hashes: EZ Tools output holds few file hashes (mainly the SHA1 in Amcache). A SHA256 or MD5 from a report usually finds nothing even if the file was there; search the file name too.')
+        $log.Add('- The Details column shows each non-empty field of the row on one line. Source and SourceLine point to the original row.')
+        $log.Add('')
+        $log.Add("IOCs ($($Iocs.Count))")
+        foreach ($i in $Iocs) { $log.Add("  $($i.Type.PadRight(5)) $($i.Ioc)") }
+        $log.Add('')
+        $log.Add('Results')
+        foreach ($row in $rows) { $log.Add(('  {0,-40} {1,-24} {2,12:n0}' -f $row.Ioc, $row.Host, $row.Hits)) }
+        $log.Add('')
+        $log.Add("Files searched ($($searched.Count), $(Format-EztBytes (($searched | Measure-Object Size -Sum).Sum)))")
+        foreach ($s in $searched) { $log.Add(('  {0}\{1}   {2}, {3:n0} rows{4}' -f $s.Host, $s.File, (Format-EztBytes $s.Size), $s.Rows, $(if (-not $s.Complete) { '   STOPPED EARLY (cancelled)' }))) }
+        if ($dupes.Count) {
+            $log.Add('')
+            $log.Add("Identical copies searched only once ($($dupes.Count)): same size and SHA-256 as the file named")
+            foreach ($d in $dupes) { $log.Add("  $($d.Host)\$($d.File)   = $($d.SameAs)") }
+        }
+        if ($skipped.Count) {
+            $log.Add('')
+            $log.Add("Files that could not be read ($($skipped.Count)): NOT searched")
+            foreach ($s in $skipped) { $log.Add("  $($s.Host)\$($s.File)   $($s.Reason)") }
+        }
+        if ($cancelled) {
+            $done = @{}; foreach ($s in $searched) { $done["$($s.Host)\$($s.File)"] = $true }
+            $left = @($files | Where-Object { -not $done["$($_.Host)\$($_.Rel)"] -and -not ($skipped | Where-Object File -eq $_.Rel) })
+            if ($left.Count) {
+                $log.Add('')
+                $log.Add("Files not searched because the search was cancelled ($($left.Count))")
+                foreach ($s in $left) { $log.Add("  $($s.Host)\$($s.Rel)") }
+            }
+        }
+        if ($broken) {
+            $log.Add('')
+            $log.Add("$broken row(s) had unbalanced quotes and were cut at 16 MB. Everything up to the cut was searched.")
+        }
+        $log | Set-Content -LiteralPath $logPath -Encoding UTF8
+
+        # One line in each case's log, so the case history shows the search happened.
+        $total = [long]($rows | Measure-Object Hits -Sum).Sum
+        foreach ($c in $cases) {
+            $hits = [long](@($rows | Where-Object Host -eq $hostOf[$c]) | Measure-Object Hits -Sum).Sum
+            $line = '{0}  {1,-5} IOC search on {2}: {3} IOCs, {4:n0} hits in this case{5}. Results: {6}' -f $finished.ToString('HH:mm:ss'), 'INFO', $finished.ToString('yyyy-MM-dd'), $Iocs.Count, $hits, $(if ($cancelled) { ' (cancelled, partial)' }), $outDir
+            try { [IO.File]::AppendAllText((Join-Path $c 'EZTriage.log'), $line + "`r`n", (New-Object Text.UTF8Encoding $false)) } catch { }
+        }
+
+        $State.Summary = "Search $(if ($cancelled) { 'cancelled' } else { 'finished' }): {0:n0} hits for $($Iocs.Count) IOCs in $(Format-EztDuration $result.Elapsed)" -f $total
+        Write-EztLog $State $State.Summary $(if ($cancelled -or $skipped.Count) { 'WARN' } else { 'INFO' })
+        $State.Result = $result
+        $result
+    } catch {
+        $State.Error = $_.Exception.Message
+        Write-EztLog $State "Search failed: $($_.Exception.Message)" 'ERROR'
+        throw
+    } finally {
+        $State.Scanner = $null
+        $State.Running = $false; $State.Done = $true
+    }
+}
+
+function Format-EztSearchSummary($Result) {
+    # The short text shown in the window and printed by Search-EZTriage.ps1.
+    $sb = New-Object Text.StringBuilder
+    $caseWord = if ($Result.Cases.Count -eq 1) { 'case folder' } else { 'case folders' }
+    [void]$sb.AppendLine(('Searched {0} CSV files ({1}) in {2} {3} in {4}.' -f $Result.Searched.Count, (Format-EztBytes $Result.Bytes), $Result.Cases.Count, $caseWord, (Format-EztDuration $Result.Elapsed)))
+    if ($Result.Cancelled) { [void]$sb.AppendLine('CANCELLED: partial results. SearchLog.txt lists what was not searched.') }
+    if ($Result.Skipped.Count) { [void]$sb.AppendLine("$($Result.Skipped.Count) file(s) could not be read and were NOT searched (see SearchLog.txt).") }
+    [void]$sb.AppendLine('')
+    # One line per IOC; with several case folders, the hosts it was found on are listed under it.
+    $w = [Math]::Min(48, [Math]::Max(4, (@($Result.Iocs | ForEach-Object { $_.Ioc.Length }) | Measure-Object -Maximum).Maximum))
+    [void]$sb.AppendLine(('{0}  {1,-4}  {2,12}' -f 'IOC'.PadRight($w), 'Type', 'Hits'))
+    $capped = $false
+    foreach ($i in $Result.Iocs) {
+        $rows = @($Result.Summary | Where-Object { $_.Ioc -eq $i.Ioc })
+        $total = [long]($rows | Measure-Object Hits -Sum).Sum
+        $mark = ''
+        if (@($rows | Where-Object { $_.Hits -gt $_.SavedInHitsCsv }).Count) { $capped = $true; $mark = ' *' }
+        $name = if ($i.Ioc.Length -gt $w) { $i.Ioc.Substring(0, $w - 3) + '...' } else { $i.Ioc.PadRight($w) }
+        [void]$sb.AppendLine(('{0}  {1,-4}  {2,12:n0}{3}' -f $name, $i.Type, $total, $mark))
+        if ($Result.Cases.Count -gt 1) {
+            foreach ($r in @($rows | Where-Object Hits)) { [void]$sb.AppendLine(('    {0,12:n0}  {1}' -f $r.Hits, $r.Host)) }
+        }
+    }
+    if ($capped) { [void]$sb.AppendLine(''); [void]$sb.AppendLine("* More than $($Result.Cap) hits in one file: only the first $($Result.Cap) per file are in Hits.csv. Summary.csv has the full counts.") }
+    [void]$sb.AppendLine('')
+    [void]$sb.AppendLine("Results: $($Result.OutDir)")
+    $sb.ToString()
 }
 
 #endregion

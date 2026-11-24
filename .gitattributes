@@ -4,3 +4,4 @@
 *.xaml text eol=crlf
 *.cmd  text eol=crlf
 *.txt  text eol=crlf
+*.cs   text eol=crlf

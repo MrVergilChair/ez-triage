@@ -892,7 +892,7 @@ function Test-RunActive {
 }
 
 function Set-Running([bool]$On) {
-    foreach ($c in 'TxtTools', 'BtnTools', 'TxtEvidence', 'BtnEvFolder', 'BtnEvZip', 'TxtCase', 'BtnCase', 'BtnStart', 'BtnSelectAll', 'BtnSelectNone', 'PnlMft', 'PnlEvtx', 'PnlRecmd', 'CmbSlots', 'CmbPolicy') {
+    foreach ($c in 'TxtTools', 'BtnTools', 'TxtEvidence', 'BtnEvFolder', 'BtnEvZip', 'TxtCase', 'BtnCase', 'BtnStart', 'BtnSelectAll', 'BtnSelectNone', 'PnlMft', 'PnlEvtx', 'PnlRecmd', 'CmbSlots', 'CmbPolicy', 'BtnSearchIocs') {
         $ui[$c].IsEnabled = -not $On
     }
     $ui.BtnCancel.IsEnabled = $On
@@ -966,6 +966,168 @@ function Update-Run {
         if ($failed.Count) { $ui.LblStatus.Text = "$($st.Summary). Check the log of: $(($failed | ForEach-Object Label) -join ', ')" }
         [Media.SystemSounds]::Asterisk.Play()
     }
+}
+
+#endregion
+
+#region IOC search
+
+function Show-SearchWindow {
+    if (Test-RunActive) { Show-Message 'Tools are still running. Search their output when the run has finished.' 'Warning' | Out-Null; return }
+    [xml]$sx = Get-Content -LiteralPath (Join-Path $AppRoot 'lib\SearchWindow.xaml') -Raw
+    $dlg = [Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader $sx))
+    $dlg.Owner = $Window
+    $w = @{ Dialog = $dlg; Result = $null }
+    foreach ($n in $sx.SelectNodes('//*[@*[local-name()="Name"]]')) {
+        $name = $n.GetAttribute('Name', 'http://schemas.microsoft.com/winfx/2006/xaml')
+        if ($name) { $w[$name] = $dlg.FindName($name) }
+    }
+    $script:SW = $w
+    # IOCs are kept only while EZ Triage is open (never saved to disk with the settings).
+    $w.TxtRoot.Text = $ui.TxtCase.Text.Trim()
+    $w.TxtIocs.Text = [string]$S.LastIocs
+    $hasTE = [bool]($S.ToolInfo -and $S.ToolInfo.TimelineExplorer)
+    if (-not $hasTE) { $w.BtnOpenHits.Content = 'Open hits'; $w.BtnOpenHits.ToolTip = 'Timeline Explorer is not in the EZ Tools folder, so Hits.csv opens with the default program' }
+    Update-SearchIocCount
+
+    $w.TxtIocs.Add_TextChanged({ Update-SearchIocCount })
+    $w.BtnRoot.Add_Click({ $p = Select-Folder 'Case folder, or a folder that holds several case folders' $script:SW.TxtRoot.Text; if ($p) { $script:SW.TxtRoot.Text = $p } })
+    $w.BtnClear.Add_Click({ $script:SW.TxtIocs.Text = ''; [void]$script:SW.TxtIocs.Focus() })
+    $w.BtnLoad.Add_Click({
+            $d = New-Object Microsoft.Win32.OpenFileDialog
+            $d.Filter = 'Text files (*.txt)|*.txt|All files (*.*)|*.*'
+            $d.Title = 'IOC list (one per line)'
+            if ($d.ShowDialog($script:SW.Dialog)) { $script:SW.TxtIocs.Text = Get-Content -LiteralPath $d.FileName -Raw }
+        })
+    $w.BtnSearch.Add_Click({ try { Start-Search } catch { Set-SearchBusy $false; Show-Message "Could not start the search: $($_.Exception.Message)" 'Error' | Out-Null } })
+    $w.BtnStop.Add_Click({ Stop-Search })
+    $w.BtnOpenHits.Add_Click({ Open-SearchFile $script:SW.Result.HitsPath })
+    $w.BtnOpenSummary.Add_Click({ Open-SearchFile $script:SW.Result.SummaryPath })
+    $w.BtnOpenLog.Add_Click({ Start-Process notepad.exe -ArgumentList "`"$($script:SW.Result.LogPath)`"" })
+    $w.BtnOpenDir.Add_Click({ Start-Process explorer.exe -ArgumentList "`"$($script:SW.Result.OutDir)`"" })
+
+    $t = New-Object Windows.Threading.DispatcherTimer
+    $t.Interval = [TimeSpan]::FromMilliseconds(200)
+    $t.Add_Tick({ try { Update-Search } catch { $script:SW.LblProgress.Text = "Error: $($_.Exception.Message)" } })
+    $w.Timer = $t
+    $t.Start()
+    $dlg.Add_Closing({
+            param($src, $evt)
+            $r = $script:SearchRun
+            if (-not $r) { return }
+            if ((Show-Message 'The search is still running. Stop it and close?' 'Warning' 'YesNo') -ne 'Yes') { $evt.Cancel = $true; return }
+            Stop-Search
+            $deadline = (Get-Date).AddSeconds(10)
+            while (-not $r.Handle.IsCompleted -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 100 }
+            Update-Search
+        })
+    $dlg.Add_Closed({ $script:SW.Timer.Stop(); $S.LastIocs = $script:SW.TxtIocs.Text })
+    [void]$w.TxtIocs.Focus()
+    [void]$dlg.ShowDialog()
+}
+
+function Update-SearchIocCount {
+    $iocs = @(ConvertFrom-EztIocText $script:SW.TxtIocs.Text)
+    if (-not $iocs.Count) { $script:SW.LblIocs.Text = ''; return }
+    $one = @{ Text = 'name/path/other'; IP = 'IP'; Hash = 'hash' }
+    $many = @{ Text = 'names/paths/other'; IP = 'IPs'; Hash = 'hashes' }
+    $parts = foreach ($t in 'Text', 'IP', 'Hash') {
+        $c = @($iocs | Where-Object Type -eq $t).Count
+        if ($c -eq 1) { "1 $($one[$t])" } elseif ($c) { "$c $($many[$t])" }
+    }
+    $msg = "$($iocs.Count) IOC$(if ($iocs.Count -ne 1) { 's' }): $($parts -join ', ')"
+    $short = @($iocs | Where-Object Short | ForEach-Object Ioc)
+    if ($short.Count) { $msg += ".  Very short, may match a lot: $($short -join ', ')" }
+    if (@($iocs | Where-Object Type -eq 'Hash').Count) { $msg += '.  Hashes: EZ Tools output mostly has only Amcache SHA1s, so search file names too.' }
+    $script:SW.LblIocs.Text = $msg
+}
+
+function Set-SearchBusy([bool]$On) {
+    $w = $script:SW
+    foreach ($c in 'TxtRoot', 'BtnRoot', 'BtnLoad', 'BtnClear', 'BtnSearch') { $w[$c].IsEnabled = -not $On }
+    $w.TxtIocs.IsReadOnly = $On
+    $w.BtnStop.IsEnabled = $On
+    $hasResult = (-not $On) -and [bool]$w.Result
+    foreach ($c in 'BtnOpenHits', 'BtnOpenSummary', 'BtnOpenLog', 'BtnOpenDir') { $w[$c].IsEnabled = $hasResult }
+}
+
+function Start-Search {
+    $w = $script:SW
+    $root = $w.TxtRoot.Text.Trim().Trim('"')
+    if (-not $root -or -not (Test-Path -LiteralPath $root -PathType Container)) { Show-Message 'Choose the case folder to search.' 'Warning' | Out-Null; return }
+    if (-not @(Get-EztSearchCases $root).Count) {
+        Show-Message "No EZ Triage case folder found at:`n$root`n`nChoose a case folder (it has EZTriage.log and a runs folder), or a folder that holds several case folders." 'Warning' | Out-Null
+        return
+    }
+    $iocs = @(ConvertFrom-EztIocText $w.TxtIocs.Text)
+    if (-not $iocs.Count) { Show-Message 'Enter at least one IOC.' 'Warning' | Out-Null; return }
+    $short = @($iocs | Where-Object Short | ForEach-Object Ioc)
+    if ($short.Count -and (Show-Message "These are very short and may match a lot of rows:`n`n$($short -join "`n")`n`nSearch anyway?" 'Warning' 'YesNo') -ne 'Yes') { return }
+    $S.LastIocs = $w.TxtIocs.Text
+    $w.Result = $null
+    $state = New-EztState
+    $ps = [powershell]::Create()
+    [void]$ps.AddScript({
+            param($EnginePath, $Root, $Iocs, $State)
+            Import-Module $EnginePath
+            Invoke-EztSearch -Path $Root -Iocs $Iocs -State $State
+        }.ToString()).AddArgument($EnginePath).AddArgument($root).AddArgument($iocs).AddArgument($state)
+    $script:SearchRun = @{ PS = $ps; Handle = $ps.BeginInvoke(); State = $state; Started = Get-Date }
+    $w.TxtResults.Text = ''
+    $w.PrgSearch.Value = 0
+    $w.LblProgress.Text = 'Starting...'
+    Set-SearchBusy $true
+}
+
+function Stop-Search {
+    $r = $script:SearchRun
+    if (-not $r) { return }
+    $r.State.Cancel = $true
+    $sc = $r.State.Scanner
+    if ($sc) { $sc.Cancel = $true }
+    $script:SW.LblProgress.Text = 'Cancelling...'
+}
+
+function Update-Search {
+    $r = $script:SearchRun
+    if (-not $r) { return }
+    $w = $script:SW; $st = $r.State
+    $line = $null
+    while ($st.LogQueue.TryDequeue([ref]$line)) { $w.TxtResults.AppendText($line + "`r`n") }
+    if (-not $r.Handle.IsCompleted) {
+        $total = [double]$st.BytesTotal; $done = [double]$st.BytesDone
+        $sc = $st.Scanner
+        if ($sc) { $done += $sc.BytesRead }
+        if ($total -gt 0) { $w.PrgSearch.Value = [Math]::Min(100, 100 * $done / $total); $done = [Math]::Min($done, $total) }
+        $elapsed = Format-EztDuration ((Get-Date) - $r.Started)
+        if ($st.FileCount -and -not $w.LblProgress.Text.StartsWith('Cancelling')) {
+            $w.LblProgress.Text = "File $($st.FileIndex) of $($st.FileCount), $(Format-EztBytes $done) of $(Format-EztBytes $total)  ($elapsed)    $($st.CurrentFile)"
+        }
+        return
+    }
+    $err = $null
+    try { [void]$r.PS.EndInvoke($r.Handle) } catch { $e = $_.Exception; while ($e.InnerException) { $e = $e.InnerException }; $err = $e.Message }
+    if (-not $err -and $r.PS.Streams.Error.Count) { $err = $r.PS.Streams.Error[0].ToString() }
+    $r.PS.Dispose()
+    $script:SearchRun = $null
+    $res = $st.Result
+    if ($res) {
+        $w.Result = $res
+        $w.TxtResults.Text = Format-EztSearchSummary $res
+        $w.PrgSearch.Value = 100
+        $w.LblProgress.Text = $st.Summary
+        $ui.LblStatus.Text = $st.Summary
+    } else {
+        $msg = if ($st.Error) { $st.Error } elseif ($err) { $err } else { 'unknown error' }
+        $w.LblProgress.Text = "Search failed: $msg"
+        $w.PrgSearch.Value = 0
+    }
+    Set-SearchBusy $false
+    [Media.SystemSounds]::Asterisk.Play()
+}
+
+function Open-SearchFile([string]$Path) {
+    if ($S.ToolInfo -and $S.ToolInfo.TimelineExplorer) { Open-TimelineExplorer $Path } else { Start-Process -FilePath $Path }
 }
 
 #endregion
@@ -1119,11 +1281,26 @@ $ui.BtnEvZip.Add_Click({
     })
 $ui.TxtEvidence.Add_LostFocus({ $t = $ui.TxtEvidence.Text.Trim(); if (-not $S.Batch -and $t -and (-not $S.Evidence -or $S.Evidence.Path -ne $t) -and -not $S.EvidenceLoading) { Set-Evidence $t } })
 $ui.BtnCase.Add_Click({
-        $title = if ($S.Batch) { 'Folder for the case folders (one per collection)' } else { 'Case folder (output goes here)' }
+        $title = if ($S.Batch) { 'Folder for the case folders (one per collection)' } else { 'Folder for the case folder (a <name>_EZTriage folder is made in it)' }
         $p = Select-Folder $title $(if ($S.Batch) { $ui.TxtCase.Text } else { Split-Path $ui.TxtCase.Text })
         if ($p) {
-            $ui.TxtCase.Text = $p
-            $S.Settings.CaseRoot = $(if ($S.Batch) { $p } else { Split-Path $p })
+            $p = $p.TrimEnd('\')
+            if ($p -match '^[A-Za-z]:$') { $p += '\' }
+            if ($S.Batch) {
+                $ui.TxtCase.Text = $p
+                $S.Settings.CaseRoot = $p
+            } else {
+                # The picked folder holds the case folder, so the <name>_EZTriage naming is kept.
+                # Picking an existing case folder (to add tools to it) uses it as it is.
+                $ev = $ui.TxtEvidence.Text.Trim().Trim('"')
+                if ((Split-Path $p -Leaf) -like '*_EZTriage' -or (Test-EztCaseDir $p) -or -not $ev) {
+                    $ui.TxtCase.Text = $p
+                    $S.Settings.CaseRoot = Split-Path $p
+                } else {
+                    $ui.TxtCase.Text = Join-Path $p (Split-Path (Get-DefaultCaseDir $ev) -Leaf)
+                    $S.Settings.CaseRoot = $p
+                }
+            }
             Update-CaseInfo
             if ($S.Evidence -and $S.Evidence.IsZip) { Update-EvidenceSelection } else { Update-All }
         }
@@ -1165,6 +1342,7 @@ $ui.CmbLogView.Add_SelectionChanged({ Show-SelectedLog $true })
 $ui.BtnOpenLog.Add_Click({ $p = Get-SelectedLogPath; if ($p) { Start-Process notepad.exe -ArgumentList "`"$p`"" } })
 $ui.BtnOpenToolDir.Add_Click({ $p = Get-SelectedLogPath; if ($p) { Start-Process explorer.exe -ArgumentList "/select,`"$p`"" } })
 $ui.BtnOpenTE.Add_Click({ Show-TimelineExplorerMenu })
+$ui.BtnSearchIocs.Add_Click({ Show-SearchWindow })
 
 # An unexpected error in a button handler is shown in the status bar instead of closing the window.
 $Window.Dispatcher.Add_UnhandledException({

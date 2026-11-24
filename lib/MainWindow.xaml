@@ -198,6 +198,8 @@
           <ComboBox x:Name="CmbSlots" Width="48" Margin="6,0,14,0"/>
           <TextBlock Text="If already processed:" VerticalAlignment="Center" Foreground="#5A636E"/>
           <ComboBox x:Name="CmbPolicy" Width="120" Margin="6,0,14,0"/>
+          <Button x:Name="BtnSearchIocs" Content="Search IOCs..." Margin="0,0,6,0"
+                  ToolTip="Search the output of a case for user names, IPs, file names, paths and hashes"/>
           <Button x:Name="BtnOpenCase" Content="Open case folder"/>
         </StackPanel>
         <StackPanel Margin="14,0" VerticalAlignment="Center">

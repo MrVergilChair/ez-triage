@@ -26,10 +26,10 @@ A small Windows tool that runs [Eric Zimmerman's forensic tools](https://ericzim
 
 ## Getting started
 
-1. Download the ZIP of the latest release from the [Releases page](https://github.com/MrVergilChair/ez-triage/releases) (for example `EZTriage-1.0.1.zip`). A release is a fixed, tested version, so every case runs the same code.
+1. Download the ZIP of the latest release from the [Releases page](https://github.com/MrVergilChair/ez-triage/releases) (for example `EZTriage-1.1.0.zip`). A release is a fixed, tested version, so every case runs the same code.
 2. Check it against the SHA-256 in the release notes before you use it:
    ```powershell
-   (Get-FileHash .\EZTriage-1.0.1.zip -Algorithm SHA256).Hash
+   (Get-FileHash .\EZTriage-1.1.0.zip -Algorithm SHA256).Hash
    ```
    Do not use the ZIP if the hash differs.
 3. Right-click the ZIP, choose **Properties**, tick **Unblock**, then extract it. This stops Windows warning about every file.
@@ -43,7 +43,7 @@ The launcher bypasses the PowerShell execution policy for this one process only.
 
 1. **EZ Tools folder.** Point it at the folder that contains `MFTECmd.exe`, `PECmd.exe` and so on. Tools in subfolders (`EvtxECmd\`, `RECmd\`, `SQLECmd\`) are found too. The location is remembered.
 2. **Evidence.** Choose a folder or drive, or a ZIP. EZ Triage detects the collection type, the host name (Velociraptor) and the Windows volumes inside it, and shows what each tool found, for example `642 files` for Prefetch or `11 of 16 logs` for event logs.
-3. **Case folder.** Suggested automatically next to the evidence (`<evidence name>_EZTriage`). Change it if you like.
+3. **Case folder.** Suggested automatically next to the evidence (`<evidence name>_EZTriage`). To put it somewhere else, click **Browse...** and pick the folder it should go in; the `<evidence name>_EZTriage` name is kept. Pick an existing case folder to add tools to it.
 4. **Tools.** Pick a preset or tick tools yourself. Click a tool's name to see its options and the exact command that will run.
 5. **Start.** Progress and a live log appear at the bottom. Use **Show** to switch between the combined log and any single tool's log. **Open in Timeline Explorer** opens that tool's CSV output (or, with "All tools", lets you pick from every CSV). It is enabled when `TimelineExplorer.exe` is in the EZ Tools folder, which is where `Get-ZimmermanTools.ps1` puts it.
 
@@ -81,6 +81,44 @@ The key log list and the event ID list are plain text files in `config\`. Edit t
 - `config\EventLogs-FOR508.txt`: Security, System, Application, both PowerShell logs, Task Scheduler, the four RDP logs (LocalSessionManager, RemoteConnectionManager, RDPClient, RdpCoreTS), WMI, WinRM, Defender, Sysmon, BITS and NetworkProfile.
 - `config\EventIds-FOR508.txt`: the event IDs passed to `--inc`.
 
+## Searching for IOCs
+
+Once the tools have run, **Search IOCs...** searches every tool CSV in a case for user names, IPs, file names, paths, hashes, domains or any other text. Run it again whenever new IOCs come in; nothing is reprocessed.
+
+1. **Where to search.** A case folder, or a folder that holds several case folders (after processing several collections) to search every host at once.
+2. **IOCs.** Paste them or load a `.txt`, one per line. Lines starting with `#` are ignored. Defanged IOCs from threat reports (`10[.]1[.]1[.]1`, `hxxp://`, `evil[.]com`) are fixed automatically.
+3. **Search.** It runs in the background with a progress bar. **Cancel** keeps what was found so far, marked as partial.
+
+Results go into a new folder per search, `Search\<date>_<time>\`, in the folder you searched:
+
+| File | Contents |
+|---|---|
+| `Hits.csv` | One row per matching row: its time (and which column that time came from), the IOC, the host, the tool CSV and line it came from (`Source`, `SourceLine`), the column that matched, and every non-empty field of the row on one line. Opens in Timeline Explorer. |
+| `Summary.csv` | One row per IOC per host: the full hit count and which tool CSVs it was found in. IOCs with no hits are listed too. |
+| `SearchLog.txt` | When and where it ran, the IOCs, every file searched (size, rows), every file that could not be read, whether it was cancelled, and the SHA-256 of `Hits.csv`. |
+| `IOCs.txt` | The IOC list as searched. |
+
+Each case's `EZTriage.log` also gets one line per search, with the hit count and the results folder.
+
+**How matching works**
+
+- Case-insensitive "contains": `jsmith` finds `CORP\JSmith`, `evil.exe` finds `C:\Users\Public\EVIL.EXE`.
+- IPs match exactly: `10.1.1.1` does not match `10.1.1.10` or `110.1.1.1`.
+- Only the tool output is searched, never the evidence. A tool or event log that was not processed was not searched, so check `SearchLog.txt` before reading "0 hits" as "not there".
+- Hashes: EZ Tools output holds few file hashes (mainly the SHA1 in Amcache). A SHA256 or MD5 from a threat report will usually find nothing even when the file was there. Search for the file name as well.
+- RECmd's `Split by category` folder is skipped: it holds the same rows as the combined CSV, so every registry hit would count twice.
+
+**Limits that keep it from running out of memory**
+
+- Files are read one row at a time, so a multi-GB `$J` or event log CSV uses no more memory than a small one.
+- `Hits.csv` keeps at most 10,000 rows per IOC per file. Counting continues past that, so `Summary.csv` and the window show the true totals. A very common IOC (the main user's name, for example) cannot fill the disk.
+- The row text saved in `Hits.csv` is trimmed to 32,000 characters (Excel's cell limit). Matching always uses the whole row.
+- A file that cannot be read is listed in `SearchLog.txt` and the search continues.
+
+**Speed.** The matching itself is a small compiled helper (`lib\IocScanner.cs`, compiled on first use), so the number of IOCs barely matters. On a test VM it searched three workstation cases (730 MB of CSVs) in about 5 seconds, and a 2.5 GB CSV in about 12 seconds, staying under 400 MB of memory. Expect slower times on spinning disks or network shares.
+
+Identical copies of a CSV within a case are searched once and listed in `SearchLog.txt` (MFTECmd 2026.11 writes the `$MFT` CSV a second time when it parses `$J`).
+
 ## The case folder
 
 ```
@@ -98,6 +136,7 @@ The key log list and the event ID list are plain text files in `config\`. Edit t
   UserActivity\LECmd\ JLECmd\ SrumECmd\ WxTCmd\ SQLECmd\
   Evidence\                    extracted ZIP (only when the evidence was a ZIP)
   _work\                       working copies (see below)
+  Search\<date>_<time>\        IOC search results (see Searching for IOCs)
 ```
 
 ### Running again
@@ -149,6 +188,17 @@ Give `-CaseRoot` instead of `-CaseDir`, and point `-Evidence` at a folder of col
 
 Leave room on the case drive: each ZIP is extracted into its case folder, and `$J` or event log CSVs can be several GB on a busy machine.
 
+### Searching for IOCs
+
+`Search-EZTriage.ps1` runs the same search as the **Search IOCs** window:
+
+```powershell
+.\Search-EZTriage.ps1 -Path D:\Cases\Host1_EZTriage -IocFile D:\Intel\iocs.txt
+.\Search-EZTriage.ps1 -Path D:\Cases -Ioc svc_backup, 10.1.1.5, evil.exe
+```
+
+`-Path` is a case folder or a folder of case folders. `-MaxHitsPerFile` changes the 10,000-row limit per IOC per file. Ctrl+C stops the search and still writes the partial results. The exit code is `0` when every file was searched in full, with or without hits, and `1` when the search failed, was cancelled or some files could not be read (so "no hits" is not conclusive).
+
 ### Exit codes
 
 An unknown `-Preset` or `-Tools` name stops with the list of valid names. The exit code is `0` when every selected tool ran ("done with warnings" and "no output" count as ran) and `1` when a tool failed, was cancelled or is not installed, or the run stopped, so scripts and scheduled tasks can check `$LASTEXITCODE`. With `-CaseRoot`, `1` means at least one collection had a problem.
@@ -170,6 +220,7 @@ Settings (tools folder, last selection, options) are saved in `%APPDATA%\EZTriag
 - **"...found, but only the ARM64 version"** (Windows on ARM). Install the x64 .NET Runtime of that version as well. It installs next to the ARM64 one, in `C:\Program Files\dotnet\x64`.
 - **A case folder will not delete** ("Could not find a part of the path", "file name too long"). An extracted collection can contain paths longer than Windows' classic 260-character limit (Windows Error Reporting files, for example), which File Explorer and Windows PowerShell's `Remove-Item` cannot always remove. Delete it with the long-path form instead: `cmd /c rd /s /q "\\?\D:\Cases\Host1"` (replace the path; it must be a full path starting with a drive letter).
 - **EvtxECmd is set to "Only the logs I tick below" but nothing is ticked.** Start stops and says so. Tick some logs or choose "FOR508 key logs". (Before 1.0 this setting could be saved empty by changing an option before choosing evidence.)
+- **The IOC search says it "needs to compile a small C# helper" and was blocked.** The search compiles `lib\IocScanner.cs` the first time it runs, because the same loop in PowerShell would take far too long on large CSVs. Some locked-down workstations block that. Processing with the tools is not affected.
 - **"Done with warnings".** Open the tool's log (Show > tool name). Typical messages such as empty jump lists or unmapped ShellBag GUIDs do not mean data is missing.
 
 ## Credits
