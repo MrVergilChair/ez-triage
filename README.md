@@ -108,9 +108,10 @@ Each case's `EZTriage.log` also gets one line per search, with the hit count and
 - Hashes: EZ Tools output holds few file hashes (mainly the SHA1 in Amcache). A SHA256 or MD5 from a threat report will usually find nothing even when the file was there. Search for the file name as well.
 - RECmd's `Split by category` folder is skipped: it holds the same rows as the combined CSV, so every registry hit would count twice.
 
-**Limits that keep it from running out of memory**
+**Large files**
 
-- Files are read one row at a time, so a multi-GB `$J` or event log CSV uses no more memory than a small one.
+Every row of every tool CSV is searched, whatever its size: a multi-GB `$MFT`, `$J` or event log CSV is searched in full. Files are read one row at a time, so a large file uses no more memory than a small one. The only limits are on what is saved:
+
 - `Hits.csv` keeps at most 10,000 rows per IOC per file. Counting continues past that, so `Summary.csv` and the window show the true totals. A very common IOC (the main user's name, for example) cannot fill the disk.
 - The row text saved in `Hits.csv` is trimmed to 32,000 characters (Excel's cell limit). Matching always uses the whole row.
 - A file that cannot be read is listed in `SearchLog.txt` and the search continues.
