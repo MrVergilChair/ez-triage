@@ -13,6 +13,8 @@
     .\Invoke-EZTriage.ps1 -ToolsPath C:\Tools\net -Evidence F:\ -CaseDir D:\Cases\Host1 -Tools EvtxECmd -EvtxIdMode All
 .EXAMPLE
     .\Invoke-EZTriage.ps1 -ToolsPath C:\Tools\net -Evidence D:\Collections\*.zip -CaseRoot D:\Cases
+.EXAMPLE
+    .\Invoke-EZTriage.ps1 -ToolsPath C:\Tools\net -Evidence D:\Collection.zip -CaseDir D:\Cases\Host1 -Tools EvtxECmd -EvtxIdMode All -EvtxRecover
 .NOTES
     Exit code 0: every selected tool ran ("done with warnings" and "no output" count as ran).
     Exit code 1: a tool failed, was cancelled or is not installed, the run stopped, or the arguments were invalid.
@@ -30,6 +32,7 @@ param(
     [ValidateSet('Key', 'All')][string]$EvtxMode = 'Key',
     [ValidateSet('FOR508', 'All', 'Custom')][string]$EvtxIdMode = 'FOR508',
     [string]$EvtxCustomIds = '',
+    [switch]$EvtxRecover,           # EvtxECmd --rr: also recover records from chunk slack and cleared chunks
     [string]$RecmdBatch = 'DFIRBatch.reb',
     [ValidateSet('Skip', 'NewFolder', 'Overwrite')][string]$IfAlreadyRan = 'Skip',
     [ValidateRange(1, 8)][int]$LightSlots = 3,
@@ -67,6 +70,12 @@ if (-not $toolInfo.DotNet.Ok) { Write-Warning $toolInfo.DotNet.Message }
 $opt = Get-EztDefaultOptions
 $opt.MftFiles = $MftFiles; $opt.EvtxMode = $EvtxMode; $opt.EvtxIdMode = $EvtxIdMode
 $opt.EvtxCustomIds = $EvtxCustomIds; $opt.RecmdBatch = $RecmdBatch
+if ($EvtxRecover -and $ids -contains 'EvtxECmd' -and $toolInfo.Tools['EvtxECmd']) {
+    if (-not (Test-EztToolOption $toolInfo.Tools['EvtxECmd'] '--rr')) {
+        throw "-EvtxRecover needs EvtxECmd with the --rr option, and EvtxECmd $($toolInfo.Versions['EvtxECmd']) in $ToolsPath does not have it. Update EZ Tools, or leave out -EvtxRecover."
+    }
+}
+$opt.EvtxRecover = [bool]$EvtxRecover
 
 function Invoke-OneCollection([string]$EvidencePath, [string]$Case) {
     # Runs the selected tools on one collection. Returns the list of problems (empty = success).

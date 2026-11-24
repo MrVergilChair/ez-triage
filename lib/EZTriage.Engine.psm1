@@ -5,7 +5,7 @@
 
 $script:ModuleRoot = Split-Path -Parent $PSScriptRoot
 $script:ModuleFile = $PSCommandPath
-$script:EngineVersion = '1.1.0'   # the one place the version is set
+$script:EngineVersion = '1.2.0'   # the one place the version is set
 
 #region Tool catalog
 
@@ -66,6 +66,7 @@ function Get-EztDefaultOptions {
         EvtxLogs       = @(Get-EztKeyLogs)
         EvtxIdMode     = 'FOR508'        # FOR508 | All | Custom
         EvtxCustomIds  = ''
+        EvtxRecover    = $false          # EvtxECmd --rr: records in chunk slack and cleared chunks
         RecmdBatch     = 'DFIRBatch.reb'   # same author and categories as Kroll_Batch, ~60% more keys
     }
 }
@@ -115,6 +116,29 @@ function Find-EztTools {
     }
     $result.DotNet = Test-EztDotNet $result.Tools
     [pscustomobject]$result
+}
+
+function Test-EztToolOption([string]$Exe, [string]$Option) {
+    # Options added in newer EZ Tools builds (EvtxECmd --rr) are only passed when the
+    # installed build lists them in its help. Cached until the exe changes.
+    if (-not $Exe -or -not (Test-Path -LiteralPath $Exe)) { return $false }
+    if (-not $script:ToolOptionCache) { $script:ToolOptionCache = @{} }
+    $key = '{0}|{1}|{2}' -f $Exe, (Get-Item -LiteralPath $Exe).LastWriteTimeUtc.Ticks, $Option
+    if ($script:ToolOptionCache.ContainsKey($key)) { return $script:ToolOptionCache[$key] }
+    $ok = $false
+    try {
+        $psi = New-Object Diagnostics.ProcessStartInfo $Exe, '--help'
+        $psi.UseShellExecute = $false; $psi.CreateNoWindow = $true
+        $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true
+        $p = [Diagnostics.Process]::Start($psi)
+        $err = $p.StandardError.ReadToEndAsync()
+        $out = $p.StandardOutput.ReadToEndAsync()
+        if ($p.WaitForExit(30000)) {
+            $ok = ($out.Result + "`n" + $err.Result) -match ('(?m)^\s*' + [regex]::Escape($Option) + '(\s|$)')
+        } else { try { $p.Kill() } catch { } }
+    } catch { $ok = $false }
+    $script:ToolOptionCache[$key] = $ok
+    $ok
 }
 
 function Test-EztDotNet($Tools) {
@@ -833,6 +857,7 @@ function Get-EztToolInputs {
                 $ids = switch ($Options.EvtxIdMode) { 'FOR508' { Get-EztFor508Ids } 'Custom' { ConvertTo-EztIdList $Options.EvtxCustomIds } default { '' } }
                 $a = @('-d', '{SRC}', '--csv', '{OUT}', '--csvf', "${p}EvtxECmd_Output.csv")
                 if ($ids) { $a += @('--inc', $ids) }
+                if ($Options.EvtxRecover) { $a += '--rr' }
                 if ($Options.EvtxMode -eq 'All') {
                     $a[1] = $logsDir.Path
                     $w = [long]0; foreach ($x in $all) { $w += $x.Size }

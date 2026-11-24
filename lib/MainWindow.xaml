@@ -156,6 +156,9 @@
                     <RadioButton x:Name="RbIdCustom" GroupName="EvtxIds" Content="Custom:" VerticalAlignment="Center"/>
                     <TextBox x:Name="TxtCustomIds" Width="260" Margin="6,0,0,0" FontFamily="Consolas" ToolTip="Comma separated, e.g. 4624,4625,4688"/>
                   </WrapPanel>
+                  <CheckBox x:Name="ChkEvtxRr" Content="Recover records from slack and cleared logs (--rr)" Margin="0,8,0,2"
+                            ToolTip="Also look for event records left in chunk slack and in chunks emptied when a log was cleared. They are added after the live records, with a Recovered column (Slack or ClearedChunk). Needs a recent EvtxECmd."/>
+                  <TextBlock x:Name="LblEvtxRr" Style="{StaticResource Hint}" Margin="20,0,0,0" Visibility="Collapsed"/>
                 </StackPanel>
                 <DockPanel Margin="0,6,0,0">
                   <DockPanel DockPanel.Dock="Top" Margin="0,0,0,4">

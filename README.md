@@ -26,10 +26,10 @@ A small Windows tool that runs [Eric Zimmerman's forensic tools](https://ericzim
 
 ## Getting started
 
-1. Download the ZIP of the latest release from the [Releases page](https://github.com/MrVergilChair/ez-triage/releases) (for example `EZTriage-1.1.0.zip`). A release is a fixed, tested version, so every case runs the same code.
+1. Download the ZIP of the latest release from the [Releases page](https://github.com/MrVergilChair/ez-triage/releases) (for example `EZTriage-1.2.0.zip`). A release is a fixed, tested version, so every case runs the same code.
 2. Check it against the SHA-256 in the release notes before you use it:
    ```powershell
-   (Get-FileHash .\EZTriage-1.1.0.zip -Algorithm SHA256).Hash
+   (Get-FileHash .\EZTriage-1.2.0.zip -Algorithm SHA256).Hash
    ```
    Do not use the ZIP if the hash differs.
 3. Right-click the ZIP, choose **Properties**, tick **Unblock**, then extract it. This stops Windows warning about every file.
@@ -72,7 +72,7 @@ RecentFileCacheParser (Windows 7) and SumECmd (Windows Server) are available but
 ### Tool options
 
 - **MFTECmd:** choose any of `$MFT`, `$J`, `$LogFile`, `$Boot` and `$SDS` separately (only `$MFT` by default), plus all timestamps (`--at`) and slack recovery (`--rs`). `$J` is parsed with the `$MFT` so paths are complete.
-- **EvtxECmd:** parse the FOR508 key logs (default), only the logs you tick, or every log. Filter by the 108 FOR508 event IDs (default), all events, or your own list. Selected logs are copied to a staging folder first, the same approach as Mark Hallman's `Automate_EvtxECmd.ps1`, so the tool does not run for an hour.
+- **EvtxECmd:** parse the FOR508 key logs (default), only the logs you tick, or every log. Filter by the 108 FOR508 event IDs (default), all events, or your own list. Selected logs are copied to a staging folder first, the same approach as Mark Hallman's `Automate_EvtxECmd.ps1`, so the tool does not run for an hour. **Recover records** (`--rr`, off by default) also brings back records left in chunk slack and in chunks emptied when a log was cleared, so a cleared Security log can often still give you its old logons. They come after the live records, marked in a `Recovered` column (`Slack` or `ClearedChunk`). It needs a recent EvtxECmd (2026.11 has it); with an older one the box is unticked and says to update EZ Tools.
 - **RECmd:** choose any batch file from RECmd's `BatchExamples` folder (`DFIRBatch.reb` by default, `Kroll_Batch.reb` for a smaller subset of the same categories) or your own `.reb`. The result is named after the batch file, for example `RECmd_DFIRBatch.csv`.
 - Every other tool finds its input automatically. User-based tools always process **all** user profiles.
 
@@ -175,7 +175,7 @@ Heavy tools (MFTECmd, EvtxECmd, RECmd) run one at a time, starting with the larg
 .\Invoke-EZTriage.ps1 -ToolsPath C:\Tools\net -Evidence F:\ -CaseDir D:\Cases\Host1 -Tools MFTECmd -MftFiles MFT,J -PlanOnly
 ```
 
-Other parameters: `-EvtxMode Key|All`, `-EvtxCustomIds 4624,4625`, `-RecmdBatch Kroll_Batch.reb`, `-IfAlreadyRan Skip|NewFolder|Overwrite`, `-LightSlots 1-8`. `-PlanOnly` prints the commands without running anything.
+Other parameters: `-EvtxMode Key|All`, `-EvtxCustomIds 4624,4625`, `-EvtxRecover` (EvtxECmd `--rr`), `-RecmdBatch Kroll_Batch.reb`, `-IfAlreadyRan Skip|NewFolder|Overwrite`, `-LightSlots 1-8`. `-PlanOnly` prints the commands without running anything.
 
 ### Several collections
 
@@ -220,6 +220,7 @@ Settings (tools folder, last selection, options) are saved in `%APPDATA%\EZTriag
 - **"...found, but only the ARM64 version"** (Windows on ARM). Install the x64 .NET Runtime of that version as well. It installs next to the ARM64 one, in `C:\Program Files\dotnet\x64`.
 - **A case folder will not delete** ("Could not find a part of the path", "file name too long"). An extracted collection can contain paths longer than Windows' classic 260-character limit (Windows Error Reporting files, for example), which File Explorer and Windows PowerShell's `Remove-Item` cannot always remove. Delete it with the long-path form instead: `cmd /c rd /s /q "\\?\D:\Cases\Host1"` (replace the path; it must be a full path starting with a drive letter).
 - **EvtxECmd is set to "Only the logs I tick below" but nothing is ticked.** Start stops and says so. Tick some logs or choose "FOR508 key logs". (Before 1.0 this setting could be saved empty by changing an option before choosing evidence.)
+- **An event log has a size but no rows in the output.** Event logs take their full size up front (often 1 MB or 20 MB), so a log that was never used or was cleared still has that size. First check the event ID filter: with "FOR508 event IDs" a log with none of those IDs comes out empty, so try "All events". If the log was cleared, tick **Recover records** (`--rr`) to bring back old records from its emptied chunks.
 - **The IOC search says it "needs to compile a small C# helper" and was blocked.** The search compiles `lib\IocScanner.cs` the first time it runs, because the same loop in PowerShell would take far too long on large CSVs. Some locked-down workstations block that. Processing with the tools is not affected.
 - **"Done with warnings".** Open the tool's log (Show > tool name). Typical messages such as empty jump lists or unmapped ShellBag GUIDs do not mean data is missing.
 

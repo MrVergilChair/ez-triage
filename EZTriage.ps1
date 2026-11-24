@@ -164,6 +164,7 @@ function Set-ToolsFolder([string]$Path) {
         $ui.LblTools.Foreground = $(if ($ti.DotNet.Ok) { $Brush.Muted } else { $Brush.Bad })
         $ui.LblVersion.Text = "EZ Triage $(Get-EztVersion)  |  $($ti.DotNet.Message)"
     }
+    Update-EvtxRecover -ToolsChanged
     Update-BatchList
     Update-All
 }
@@ -472,6 +473,7 @@ function Write-OptionsToUi {
     $ui.RbIdAll.IsChecked = $o.EvtxIdMode -eq 'All'
     $ui.RbIdCustom.IsChecked = $o.EvtxIdMode -eq 'Custom'
     $ui.TxtCustomIds.Text = $o.EvtxCustomIds
+    $ui.ChkEvtxRr.IsChecked = [bool]$o.EvtxRecover
     $ids = (Get-EztFor508Ids) -split ','
     $ui.LblIdFor508.Text = "FOR508 event IDs ($($ids.Count))"
     $ui.RbIdFor508.ToolTip = "The $($ids.Count) event IDs from config\EventIds-FOR508.txt, the list used by Automate_EvtxECmd.ps1"
@@ -489,6 +491,8 @@ function Read-OptionsFromUi {
     $o.EvtxMode = if ($ui.RbEvtxAll.IsChecked) { 'All' } elseif ($ui.RbEvtxPick.IsChecked) { 'Pick' } else { 'Key' }
     $o.EvtxIdMode = if ($ui.RbIdAll.IsChecked) { 'All' } elseif ($ui.RbIdCustom.IsChecked) { 'Custom' } else { 'FOR508' }
     $o.EvtxCustomIds = $ui.TxtCustomIds.Text
+    $o.EvtxRecover = [bool]$ui.ChkEvtxRr.IsChecked
+    Update-EvtxRecover
     if ($ui.CmbBatch.SelectedItem) { $o.RecmdBatch = [string]$ui.CmbBatch.SelectedItem }
     if ($o.EvtxMode -eq 'Key') { $o.EvtxLogs = @(Get-EztKeyLogs) }
     elseif ($o.EvtxMode -eq 'Pick') {
@@ -499,6 +503,22 @@ function Read-OptionsFromUi {
     }
     Update-LogChecks
     Update-All
+}
+
+function Update-EvtxRecover([switch]$ToolsChanged) {
+    # --rr only exists in newer EvtxECmd builds. The installed one is asked (its help) when the
+    # box is ticked or the tools folder changes, so a run never fails on an unknown option.
+    if ($ToolsChanged) { $ui.LblEvtxRr.Visibility = 'Collapsed' }
+    if (-not $S.Options.EvtxRecover) { return }
+    $exe = if ($S.ToolInfo) { $S.ToolInfo.Tools['EvtxECmd'] } else { '' }
+    if (-not $exe) { return }
+    [Windows.Input.Mouse]::OverrideCursor = [Windows.Input.Cursors]::Wait
+    try { $ok = Test-EztToolOption $exe '--rr' } finally { [Windows.Input.Mouse]::OverrideCursor = $null }
+    if ($ok) { $ui.LblEvtxRr.Visibility = 'Collapsed'; return }
+    $S.Options.EvtxRecover = $false
+    $S.Suspend = $true; $ui.ChkEvtxRr.IsChecked = $false; $S.Suspend = $false
+    $ui.LblEvtxRr.Text = "EvtxECmd $($S.ToolInfo.Versions['EvtxECmd']) in your EZ Tools folder does not have --rr. Update EZ Tools to use it."
+    $ui.LblEvtxRr.Visibility = 'Visible'
 }
 
 function Build-LogList {
@@ -1311,7 +1331,7 @@ foreach ($tb in 'TxtTools', 'TxtEvidence', 'TxtCase') {
     $ui[$tb].Add_KeyDown({ param($src, $evt) if ($evt.Key -eq 'Return') { [void]$src.MoveFocus((New-Object Windows.Input.TraversalRequest 'Next')) } })
 }
 
-foreach ($c in 'ChkMftMFT', 'ChkMftJ', 'ChkMftLogFile', 'ChkMftBoot', 'ChkMftSDS', 'ChkMftAt', 'ChkMftRs', 'RbEvtxKey', 'RbEvtxPick', 'RbEvtxAll', 'RbIdFor508', 'RbIdAll', 'RbIdCustom') {
+foreach ($c in 'ChkMftMFT', 'ChkMftJ', 'ChkMftLogFile', 'ChkMftBoot', 'ChkMftSDS', 'ChkMftAt', 'ChkMftRs', 'RbEvtxKey', 'RbEvtxPick', 'RbEvtxAll', 'RbIdFor508', 'RbIdAll', 'RbIdCustom', 'ChkEvtxRr') {
     $ui[$c].Add_Click({ Read-OptionsFromUi })
 }
 $ui.TxtCustomIds.Add_TextChanged({ if (-not $S.Suspend) { if (-not $ui.RbIdCustom.IsChecked -and $ui.TxtCustomIds.IsFocused) { $ui.RbIdCustom.IsChecked = $true }; Read-OptionsFromUi } })
